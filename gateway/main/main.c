@@ -5,8 +5,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "gw_http.h"
 #include "gw_keys.h"
 #include "gw_link.h"
+#include "gw_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
 
@@ -38,6 +40,12 @@ static void on_prov(const gw_prov_status_t *st)
     ESP_LOGI(TAG, "provisioning %s", gw_prov_state_name(st->state));
 }
 
+static void on_ota(const gw_ota_status_t *st)
+{
+    ESP_LOGI(TAG, "ota %s v%s %lu/%lu %s", gw_ota_state_name(st->state), st->version,
+             (unsigned long)st->received, (unsigned long)st->total, st->error);
+}
+
 #define VALIDATE_TIMEOUT_S 120
 
 /*
@@ -46,6 +54,11 @@ static void on_prov(const gw_prov_status_t *st)
  */
 static void validate_task(void *arg)
 {
+#if CONFIG_GW_TEST_ABORT_BEFORE_VALIDATE
+    ESP_LOGE(TAG, "GW_TEST_ABORT_BEFORE_VALIDATE: aborting, bootloader should roll back");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    abort();
+#endif
     for (int i = 0; i < VALIDATE_TIMEOUT_S; i++) {
         gw_wifi_status_t st;
         gw_wifi_get_status(&st);
@@ -86,6 +99,8 @@ void app_main(void)
     ESP_ERROR_CHECK(gw_wifi_init());
     gw_link_set_event_cb(on_event);
     ESP_ERROR_CHECK(gw_link_start());
+    ESP_ERROR_CHECK(gw_http_start());
+    gw_ota_set_cb(on_ota);
     ESP_ERROR_CHECK(gw_prov_init(on_prov));
     ESP_ERROR_CHECK(gw_keys_start(on_key));
 

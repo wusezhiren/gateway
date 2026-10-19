@@ -9,6 +9,8 @@
  *   wifi clear                 清除路由器配置
  *   prov [start|stop|status]   配网模式
  *   keys [on|off]              打印按键 ADC 读数
+ *   token                      打印 App/OTA 接口用的 API token
+ *   ota                        查看 OTA 状态和分区
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +20,10 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "gw_keys.h"
+#include "esp_app_desc.h"
+#include "esp_ota_ops.h"
 #include "gw_link.h"
+#include "gw_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
 
@@ -165,6 +170,28 @@ static int cmd_keys(int argc, char **argv)
     return 0;
 }
 
+static int cmd_token(int argc, char **argv)
+{
+    printf("%s\n", gw_prov_api_token());
+    return 0;
+}
+
+static int cmd_ota(int argc, char **argv)
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+    esp_ota_get_state_partition(run, &state);
+    gw_ota_status_t st;
+    gw_ota_get_status(&st);
+    printf("running: %s v%s on %s (img state %d), next: %s\n", app->project_name, app->version,
+           run->label, (int)state, next ? next->label : "-");
+    printf("ota: %s %s %lu/%lu %s\n", gw_ota_state_name(st.state), st.version,
+           (unsigned long)st.received, (unsigned long)st.total, st.error);
+    return 0;
+}
+
 void gw_console_start(void)
 {
     esp_console_repl_t *repl = NULL;
@@ -186,6 +213,8 @@ void gw_console_start(void)
         {.command = "wifi",   .help = "wifi [status] | wifi set <ssid> [pass] | wifi clear", .func = cmd_wifi},
         {.command = "prov",   .help = "prov [start|stop|status], provisioning softap", .func = cmd_prov},
         {.command = "keys",   .help = "keys [on|off], log key ADC readings", .func = cmd_keys},
+        {.command = "token",  .help = "Print API token for app / OTA", .func = cmd_token},
+        {.command = "ota",    .help = "Show OTA status and partitions", .func = cmd_ota},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

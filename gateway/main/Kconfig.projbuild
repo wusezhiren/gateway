@@ -20,4 +20,13 @@ menu "Gateway"
             Limited by ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM; encrypted ESP-NOW peers and
             SoftAP clients share 17 hardware keys (3 are kept for provisioning).
 
+    menu "Debug"
+        config GW_TEST_ABORT_BEFORE_VALIDATE
+            bool "Abort before marking OTA image valid (rollback test only)"
+            default n
+            help
+                Builds a deliberately broken firmware: after an OTA it aborts before
+                confirming itself, so the bootloader must roll back. Never ship this.
+    endmenu
+
 endmenu

@@ -6,6 +6,7 @@
 
 /*
  * 配网：SoftAP + DNS 劫持（强制门户）+ HTTP 配网接口（网页和 App 共用，见 docs/api.md）。
+ * 接口挂在 gw_http 常驻服务上，gw_prov_init() 须在 gw_http_start() 之后调用。
  * 10 分钟无操作自动退出；配网成功后热点保留 30 秒再关闭。
  */
 

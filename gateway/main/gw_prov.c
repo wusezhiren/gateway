@@ -15,6 +15,7 @@
 #include "lwip/sockets.h"
 #include "nvs.h"
 #include "qrcode.h"
+#include "gw_http.h"
 #include "gw_prov.h"
 
 static const char *TAG = "gw_prov";
@@ -34,7 +35,6 @@ static gw_prov_status_t s_st;
 static int64_t s_deadline_us;
 static gw_prov_cb_t s_cb;
 static TaskHandle_t s_task;
-static httpd_handle_t s_httpd;
 static volatile bool s_dns_run;
 static volatile TaskHandle_t s_dns_task;
 static char s_ap_ip[16] = "192.168.4.1";
@@ -207,8 +207,21 @@ static esp_err_t send_error(httpd_req_t *req, const char *status, const char *ms
     return send_json(req, o);
 }
 
+/* 配网接口常驻注册，不在配网时一律 404 */
+static bool prov_active(httpd_req_t *req)
+{
+    if (s_st.state != GW_PROV_OFF) {
+        return true;
+    }
+    gw_http_error(req, "404 Not Found", "not_provisioning");
+    return false;
+}
+
 static esp_err_t root_get(httpd_req_t *req)
 {
+    if (!prov_active(req)) {
+        return ESP_OK;
+    }
     touch();
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -217,6 +230,9 @@ static esp_err_t root_get(httpd_req_t *req)
 
 static esp_err_t scan_get(httpd_req_t *req)
 {
+    if (!prov_active(req)) {
+        return ESP_OK;
+    }
     touch();
     static wifi_ap_record_t recs[SCAN_MAX];
     int n = gw_wifi_scan(recs, SCAN_MAX);
@@ -236,6 +252,9 @@ static esp_err_t scan_get(httpd_req_t *req)
 
 static esp_err_t connect_post(httpd_req_t *req)
 {
+    if (!prov_active(req)) {
+        return ESP_OK;
+    }
     touch();
     char body[MAX_BODY + 1];
     if (req->content_len <= 0 || req->content_len > MAX_BODY) {
@@ -290,6 +309,9 @@ static esp_err_t connect_post(httpd_req_t *req)
 
 static esp_err_t status_get(httpd_req_t *req)
 {
+    if (!prov_active(req)) {
+        return ESP_OK;
+    }
     gw_prov_status_t st;
     gw_prov_get_status(&st);
     if (st.state == GW_PROV_CONNECTING || st.state == GW_PROV_DONE) {
@@ -314,20 +336,20 @@ static esp_err_t status_get(httpd_req_t *req)
 /* 系统联网检测（generate_204、hotspot-detect.html 等）都会落到这里，重定向触发配网页弹出 */
 static esp_err_t redirect_404(httpd_req_t *req, httpd_err_code_t err)
 {
+    if (s_st.state == GW_PROV_OFF) {
+        return gw_http_error(req, "404 Not Found", "not_found");
+    }
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", s_portal_uri);
     /* iOS 需要响应体才能识别强制门户 */
     return httpd_resp_sendstr(req, "Redirect to setup page");
 }
 
-static esp_err_t httpd_up(void)
+static esp_err_t register_handlers(void)
 {
-    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.stack_size = 6144;
-    cfg.lru_purge_enable = true;
-    esp_err_t err = httpd_start(&s_httpd, &cfg);
-    if (err != ESP_OK) {
-        return err;
+    httpd_handle_t httpd = gw_http_handle();
+    if (!httpd) {
+        return ESP_ERR_INVALID_STATE;
     }
     const httpd_uri_t uris[] = {
         {.uri = "/", .method = HTTP_GET, .handler = root_get},
@@ -336,10 +358,12 @@ static esp_err_t httpd_up(void)
         {.uri = "/api/prov/status", .method = HTTP_GET, .handler = status_get},
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        httpd_register_uri_handler(s_httpd, &uris[i]);
+        esp_err_t err = httpd_register_uri_handler(httpd, &uris[i]);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
-    httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, redirect_404);
-    return ESP_OK;
+    return httpd_register_err_handler(httpd, HTTPD_404_NOT_FOUND, redirect_404);
 }
 
 /* ---------- 状态机 ---------- */
@@ -399,14 +423,6 @@ esp_err_t gw_prov_start(void)
     }
     set_captive_dhcp_option();
     dns_start();
-    err = httpd_up();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd start failed: %s", esp_err_to_name(err));
-        dns_stop();
-        gw_wifi_prov_end();
-        UNLOCK();
-        return err;
-    }
     s_st.state = GW_PROV_WAITING;
     s_deadline_us = esp_timer_get_time() + IDLE_TIMEOUT_US;
     UNLOCK();
@@ -429,14 +445,8 @@ void gw_prov_stop(void)
     s_st.state = GW_PROV_OFF;
     s_connect_pending = false;
     memset(s_pending_pass, 0, sizeof(s_pending_pass));
-    httpd_handle_t httpd = s_httpd;
-    s_httpd = NULL;
     UNLOCK();
 
-    /* 在锁外停服务：httpd_stop 要等处理函数返回，而处理函数可能正在等锁 */
-    if (httpd) {
-        httpd_stop(httpd);
-    }
     dns_stop();
     gw_wifi_prov_end();
     ESP_LOGI(TAG, "provisioning stopped");
@@ -562,10 +572,7 @@ esp_err_t gw_prov_init(gw_prov_cb_t cb)
     snprintf(s_portal_uri, sizeof(s_portal_uri), "http://%s/", s_ap_ip);
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, ap_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, ap_event, NULL));
-    /* 关掉重定向产生的大量 httpd 警告 */
-    esp_log_level_set("httpd_uri", ESP_LOG_ERROR);
-    esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
-    esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
+    ESP_ERROR_CHECK(register_handlers());
     if (xTaskCreate(prov_task, "gw_prov", 4096, NULL, 4, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }

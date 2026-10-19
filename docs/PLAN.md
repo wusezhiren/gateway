@@ -157,9 +157,20 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 ### 3a 网关自升级
 
 - `POST /api/ota/gateway`：流式写入空闲 OTA 槽，`esp_ota_end()` 校验签名，成功后切换启动分区并重启
-- 屏幕显示接收与校验进度，重启前提示
+- 屏幕显示接收与校验进度，重启前提示（阶段 4，进度回调 `gw_ota_set_cb` 已就绪）
 - 网关重启期间节点掉线数秒，之后自动重新入网
 - PC 脚本 `tools/ota_upload.py` 先行验证，App 复用同一接口
+
+进度：
+
+- [x] 常驻 HTTP 服务 `gw_http`，配网接口改挂其上（非配网时 404）；`GET /api/info`；Bearer token 鉴权
+- [x] `POST /api/ota/gateway`：先验镜像头（app 镜像 / 工程名 / 版本不降级，`force=1` 例外）再写 flash
+- [x] PC 工具 `tools/ota_upload.py`（绕过系统代理）；串口 `token`、`ota` 命令
+- [x] 实测（Korvo，局域网，约 8 秒/900KB）：
+  - 拒绝：无 token 401、同版本 409、节点固件 400、随机数据 400、**未签名固件签名校验失败 400**
+  - 0.1.0 → 0.2.0 升级成功，`ota_1` 启动，2.4 秒确认有效
+  - **回滚**：OTA 一个确认前 abort 的 0.3.0（`GW_TEST_ABORT_BEFORE_VALIDATE`），bootloader 自动回到 0.2.0
+  - `force=1` 降级回 0.1.0，回滚后的分区可再次写入
 
 ### 3b 节点升级（ESP-NOW 分片）
 

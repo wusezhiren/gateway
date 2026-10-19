@@ -67,6 +67,19 @@ ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
 | `prov [start\|stop\|status]` | 配网模式（热点 `ESP-GW-XXXX` / `a12345678`） |
 | `keys [on\|off]` | 打印按键 ADC 读数 |
 
+## 网关 OTA
+
+```bash
+# token：网关串口执行 token
+tools/ota_upload.py 192.168.x.x gateway/build/esp_s3_gateway.bin --token <token>
+```
+
+- 只接受用 `keys/signing_key.pem` 签名的网关固件，默认不允许同版本或降级（`--force` 例外）
+- 版本号在构建时指定：`idf.py -DPROJECT_VER=0.2.0 build`
+- 新固件确认前崩溃会自动回滚；回滚测试固件可用
+  `CONFIG_GW_TEST_ABORT_BEFORE_VALIDATE=y` 单独构建（**不要发布**）
+- 接口见 [docs/api.md](docs/api.md)
+
 ## 配网
 
 - 从未配网：开机自动进入配网模式

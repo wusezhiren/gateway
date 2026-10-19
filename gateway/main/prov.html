@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>网关配网</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2129;--sub:#86909c;--line:#e5e6eb;--pri:#1677ff;--ok:#00a870;--err:#e34d59}
+@media (prefers-color-scheme:dark){:root{--bg:#17171a;--card:#232429;--fg:#e8e8ea;--sub:#8a8b91;--line:#34353b;--pri:#3c8cff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+main{max-width:480px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:8px 0 4px}
+.sub{color:var(--sub);font-size:13px;margin:0 0 16px}
+.card{background:var(--card);border-radius:12px;padding:4px 0;margin-bottom:16px}
+.hd{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;color:var(--sub);font-size:13px}
+.hd button{background:none;border:0;color:var(--pri);font-size:13px;padding:0}
+.ap{display:flex;align-items:center;padding:12px 16px;border-top:1px solid var(--line);cursor:pointer}
+.ap:active{background:var(--line)}
+.ap .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap .m{color:var(--sub);font-size:12px;margin-left:8px;white-space:nowrap}
+.ap.sel{color:var(--pri)}
+.empty{padding:16px;color:var(--sub);text-align:center;border-top:1px solid var(--line)}
+form{padding:4px 16px 16px}
+label{display:block;color:var(--sub);font-size:13px;margin:10px 0 4px}
+.row{display:flex;gap:8px}
+input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:16px}
+.eye{flex:none;width:64px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--sub)}
+.go{width:100%;margin-top:16px;padding:12px;border:0;border-radius:8px;background:var(--pri);color:#fff;font-size:16px}
+.go:disabled{opacity:.5}
+.tip{color:var(--sub);font-size:12px;margin-top:8px}
+#msg{display:none;padding:14px 16px;border-radius:12px;margin-bottom:16px;background:var(--card)}
+#msg.ok{color:var(--ok)}#msg.err{color:var(--err)}
+</style>
+</head>
+<body>
+<main>
+<h1>网关配网</h1>
+<p class="sub">选择要连接的 Wi-Fi（仅支持 2.4GHz），或手动输入</p>
+
+<div id="msg"></div>
+
+<div class="card">
+  <div class="hd"><span>附近的网络</span><button id="rescan" type="button">刷新</button></div>
+  <div id="list"><div class="empty">正在扫描…</div></div>
+</div>
+
+<div class="card">
+  <form id="f">
+    <label for="ssid">网络名称（SSID）</label>
+    <input id="ssid" maxlength="32" autocomplete="off" autocapitalize="off" required>
+    <label for="pw">密码</label>
+    <div class="row">
+      <input id="pw" type="password" maxlength="63" autocomplete="off" autocapitalize="off">
+      <button class="eye" id="eye" type="button">显示</button>
+    </div>
+    <button class="go" id="go" type="submit">连接</button>
+    <p class="tip">隐藏网络请直接输入名称。开放网络密码留空。</p>
+  </form>
+</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const REASON = {bad_password:'密码错误', no_ap:'找不到该网络（确认是 2.4GHz 且信号足够）', no_ip:'已连上但没有获取到 IP，请检查路由器', failed:'连接失败'};
+const POLL_LIMIT = 90;      // 最多轮询 90 次（约 2 分钟），网关成功后 30 秒就会关热点
+let pollCount = 0, failStreak = 0;
+
+/* 网关切信道时请求可能石沉大海，所有请求都必须有超时 */
+async function fetchT(url, opts, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms || 4000);
+  try { return await fetch(url, Object.assign({cache: 'no-store', signal: ctl.signal}, opts)); }
+  finally { clearTimeout(t); }
+}
+
+function msg(text, cls) {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = cls || '';
+  m.style.display = text ? 'block' : 'none';
+}
+
+function bars(rssi) { return rssi >= -55 ? '强' : rssi >= -70 ? '中' : '弱'; }
+
+async function scan() {
+  $('list').innerHTML = '<div class="empty">正在扫描…</div>';
+  try {
+    const r = await fetchT('/api/prov/scan', {}, 10000);
+    if (!r.ok) throw 0;
+    const aps = await r.json();
+    if (!aps.length) { $('list').innerHTML = '<div class="empty">没有发现网络，可手动输入</div>'; return; }
+    $('list').innerHTML = '';
+    for (const ap of aps) {
+      const d = document.createElement('div');
+      d.className = 'ap';
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = ap.ssid;
+      const m = document.createElement('span'); m.className = 'm';
+      m.textContent = (ap.secure ? '🔒 ' : '') + '信号' + bars(ap.rssi);
+      d.append(n, m);
+      d.onclick = () => {
+        document.querySelectorAll('.ap').forEach(e => e.classList.remove('sel'));
+        d.classList.add('sel');
+        $('ssid').value = ap.ssid;
+        $('pw').value = '';
+        if (ap.secure) $('pw').focus();
+      };
+      $('list').append(d);
+    }
+  } catch (e) {
+    $('list').innerHTML = '<div class="empty">扫描失败，请稍后刷新</div>';
+  }
+}
+
+/* 串行轮询：上一次请求结束（成功或超时）后再发下一次，避免请求堆积 */
+async function poll() {
+  if (++pollCount > POLL_LIMIT) {
+    msg('长时间没有收到网关的结果。若网关已连上路由器，热点会自动关闭；请查看网关屏幕或重新进入配网。', 'err');
+    $('go').disabled = false;
+    return;
+  }
+  try {
+    const s = await (await fetchT('/api/prov/status')).json();
+    failStreak = 0;
+    if (s.state === 'connecting') {
+      msg('正在连接 “' + s.ssid + '” …');
+    } else if (s.state === 'done') {
+      msg('配网成功！网关地址 ' + s.ip + '，热点将在 ' + s.close_in + ' 秒后关闭，手机会自动切回原来的网络。', 'ok');
+      return;
+    } else if (s.state === 'failed') {
+      msg((REASON[s.reason] || '连接失败') + '，请检查后重试。', 'err');
+      $('go').disabled = false;
+      return;
+    }
+  } catch (e) {
+    /* 网关连路由器时会切换信道，手机可能短暂收不到响应 */
+    if (++failStreak >= 2) msg('网关正在切换信道，连接暂时中断，正在重试…');
+  }
+  setTimeout(poll, 1000);
+}
+
+$('f').onsubmit = async e => {
+  e.preventDefault();
+  const ssid = $('ssid').value, password = $('pw').value;
+  if (password && password.length < 8) { msg('Wi-Fi 密码至少 8 位', 'err'); return; }
+  $('go').disabled = true;
+  msg('正在连接 “' + ssid + '” …');
+  try {
+    const r = await fetchT('/api/prov/connect', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ssid, password})});
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      msg(j.error === 'invalid_ssid_or_password' ? '网络名称或密码格式不正确' : '网关忙，请稍后重试', 'err');
+      $('go').disabled = false;
+      return;
+    }
+  } catch (e) {
+    /* 响应超时不代表没收到，继续查状态 */
+  }
+  pollCount = 0; failStreak = 0;
+  setTimeout(poll, 1000);
+};
+
+$('eye').onclick = () => {
+  const pw = $('pw');
+  pw.type = pw.type === 'password' ? 'text' : 'password';
+  $('eye').textContent = pw.type === 'password' ? '显示' : '隐藏';
+};
+$('rescan').onclick = scan;
+scan();
+</script>
+</body>
+</html>

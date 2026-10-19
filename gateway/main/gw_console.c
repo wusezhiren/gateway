@@ -7,6 +7,8 @@
  *   wifi [status]              查看 Wi-Fi 状态
  *   wifi set <ssid> [pass]     配置路由器
  *   wifi clear                 清除路由器配置
+ *   prov [start|stop|status]   配网模式
+ *   keys [on|off]              打印按键 ADC 读数
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +17,9 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "gw_keys.h"
 #include "gw_link.h"
+#include "gw_prov.h"
 #include "gw_wifi.h"
 
 static const char *TAG = "gw_console";
@@ -111,14 +115,54 @@ static int cmd_wifi(int argc, char **argv)
         gw_wifi_get_status(&st);
         if (!st.configured) {
             printf("router: not configured\n");
+        } else if (st.connected) {
+            printf("router: \"%s\" connected %s rssi %d\n", st.ssid, st.ip, st.rssi);
         } else {
-            printf("router: \"%s\" %s %s\n", st.ssid, st.connected ? "connected" : "connecting", st.ip);
+            printf("router: \"%s\" connecting\n", st.ssid);
         }
-        printf("channel: %d, pairing: %lus left\n", st.channel, (unsigned long)gw_link_pair_remaining());
+        printf("channel: %d, pairing: %lus left%s\n", st.channel, (unsigned long)gw_link_pair_remaining(),
+               st.prov ? ", provisioning" : "");
         return 0;
     }
     printf("usage: wifi [status] | wifi set <ssid> [pass] | wifi clear\n");
     return 1;
+}
+
+static int cmd_prov(int argc, char **argv)
+{
+    const char *op = argc > 1 ? argv[1] : "status";
+    if (strcmp(op, "start") == 0) {
+        esp_err_t err = gw_prov_start();
+        printf("%s\n", err == ESP_OK ? "provisioning started" : esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
+    }
+    if (strcmp(op, "stop") == 0) {
+        gw_prov_stop();
+        return 0;
+    }
+    if (strcmp(op, "status") == 0) {
+        gw_prov_status_t st;
+        gw_prov_get_status(&st);
+        printf("state: %s\n", gw_prov_state_name(st.state));
+        if (st.state != GW_PROV_OFF) {
+            printf("softap: \"%s\" password \"%s\", %d phone(s), closes in %lus\n",
+                   st.ap_ssid, st.ap_pass, st.clients, (unsigned long)st.remaining_s);
+        }
+        if (st.target[0]) {
+            printf("target: \"%s\" result %s %s\n", st.target, gw_try_state_name(st.result), st.ip);
+        }
+        return 0;
+    }
+    printf("usage: prov [start|stop|status]\n");
+    return 1;
+}
+
+static int cmd_keys(int argc, char **argv)
+{
+    bool on = argc < 2 || strcmp(argv[1], "off") != 0;
+    gw_keys_set_debug(on);
+    printf("key adc debug %s\n", on ? "on" : "off");
+    return 0;
 }
 
 void gw_console_start(void)
@@ -140,6 +184,8 @@ void gw_console_start(void)
         {.command = "pair",   .help = "pair [seconds], open pairing window (default 60, 0 closes)", .func = cmd_pair},
         {.command = "unpair", .help = "unpair <idx>", .func = cmd_unpair},
         {.command = "wifi",   .help = "wifi [status] | wifi set <ssid> [pass] | wifi clear", .func = cmd_wifi},
+        {.command = "prov",   .help = "prov [start|stop|status], provisioning softap", .func = cmd_prov},
+        {.command = "keys",   .help = "keys [on|off], log key ADC readings", .func = cmd_keys},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

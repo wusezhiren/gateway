@@ -84,6 +84,8 @@ JOIN_RSP 走广播是因为此时节点还没把网关加为加密 peer，单播
 - `CONFIG_MP_ENCRYPT`（默认开）：配对后双方互加加密 peer，使用 `CONFIG_MP_PMK` / `CONFIG_MP_LMK`（各 16 字符）。
 - 网关和所有节点必须使用相同的密钥配置；部署前请修改默认值。
 - 广播帧（JOIN_REQ / JOIN_RSP）始终明文。
+- 加密 peer 与 SoftAP 客户端共用 17 个硬件密钥。网关 `ESPNOW_MAX_ENCRYPT_NUM=14`（节点上限 14），
+  剩下 3 个给配网热点；否则热点最大连接数会被压成 0，手机连不上。
 
 ## 兼容性
 

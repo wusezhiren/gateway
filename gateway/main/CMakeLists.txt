@@ -1,3 +1,5 @@
-idf_component_register(SRCS "main.c" "gw_wifi.c" "gw_link.c" "gw_console.c"
+idf_component_register(SRCS "main.c" "gw_wifi.c" "gw_link.c" "gw_console.c" "gw_keys.c" "gw_prov.c"
                        INCLUDE_DIRS "."
-                       REQUIRES meshproto esp_wifi esp_timer app_update esp_netif nvs_flash console)
+                       EMBED_FILES "prov.html"
+                       REQUIRES meshproto esp_wifi esp_timer app_update esp_netif nvs_flash console
+                                esp_http_server json esp_adc)

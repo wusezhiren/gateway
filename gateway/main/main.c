@@ -5,7 +5,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "gw_keys.h"
 #include "gw_link.h"
+#include "gw_prov.h"
 #include "gw_wifi.h"
 
 void gw_console_start(void);
@@ -22,6 +24,18 @@ static void on_event(gw_event_t ev, int idx)
         [GW_EV_SET_FAILED] = "set_failed",
     };
     ESP_LOGI(TAG, "event %s node %d", names[ev], idx);
+}
+
+static void on_key(gw_key_t key, gw_key_event_t ev)
+{
+    if (key == GW_KEY_REC && ev == GW_KEY_EV_LONG) {
+        gw_prov_on_long_press();
+    }
+}
+
+static void on_prov(const gw_prov_status_t *st)
+{
+    ESP_LOGI(TAG, "provisioning %s", gw_prov_state_name(st->state));
 }
 
 #define VALIDATE_TIMEOUT_S 120
@@ -72,6 +86,16 @@ void app_main(void)
     ESP_ERROR_CHECK(gw_wifi_init());
     gw_link_set_event_cb(on_event);
     ESP_ERROR_CHECK(gw_link_start());
+    ESP_ERROR_CHECK(gw_prov_init(on_prov));
+    ESP_ERROR_CHECK(gw_keys_start(on_key));
+
+    gw_wifi_status_t ws;
+    gw_wifi_get_status(&ws);
+    if (!ws.configured) {
+        /* 从未配置过路由器：开机直接进入配网 */
+        gw_prov_start();
+    }
+
     if (pending_verify()) {
         xTaskCreate(validate_task, "validate", 3072, NULL, 3, NULL);
     }

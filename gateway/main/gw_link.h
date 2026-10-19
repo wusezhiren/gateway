@@ -8,6 +8,9 @@
 
 #define GW_MAX_NODES CONFIG_GW_MAX_NODES
 
+_Static_assert(GW_MAX_NODES <= CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM,
+               "GW_MAX_NODES exceeds ESP-NOW encrypted peer limit");
+
 typedef struct {
     bool         used;
     uint8_t      mac[6];

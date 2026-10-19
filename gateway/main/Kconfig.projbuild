@@ -8,9 +8,16 @@ menu "Gateway"
             Once connected to a router, the gateway follows the router's channel
             and nodes find it by scanning.
 
+    config GW_PROV_AP_PASSWORD
+        string "Provisioning SoftAP password (8-63 chars, empty = random each time)"
+        default "a12345678"
+
     config GW_MAX_NODES
         int "Maximum number of paired nodes"
-        range 1 17
-        default 16
+        range 1 14
+        default 14
+        help
+            Limited by ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM; encrypted ESP-NOW peers and
+            SoftAP clients share 17 hardware keys (3 are kept for provisioning).
 
 endmenu

@@ -64,3 +64,12 @@ ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
 | `set <idx> <ch> <value>` | 设置节点通道 |
 | `unpair <idx>` | 解除配对 |
 | `wifi [status]` / `wifi set <ssid> [pass]` / `wifi clear` | 路由器配置 |
+| `prov [start\|stop\|status]` | 配网模式（热点 `ESP-GW-XXXX` / `a12345678`） |
+| `keys [on\|off]` | 打印按键 ADC 读数 |
+
+## 配网
+
+- 从未配网：开机自动进入配网模式
+- 未联网时长按 **REC** 3 秒进入；配网中再长按取消
+- 手机连热点 `ESP-GW-XXXX`（密码 `a12345678`），自动弹出配网页（或访问 `http://192.168.4.1`）
+- 接口见 [docs/api.md](docs/api.md)

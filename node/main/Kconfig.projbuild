@@ -1,0 +1,31 @@
+menu "Node"
+
+    config NODE_NAME
+        string "Node name prefix (last 2 MAC bytes appended)"
+        default "node"
+
+    config NODE_RELAY_GPIOS
+        string "Relay GPIOs, comma separated (empty = none)"
+        default "4,5"
+
+    config NODE_RELAY_ACTIVE_LOW
+        bool "Relays are active low"
+        default n
+
+    config NODE_PWM_GPIOS
+        string "PWM GPIOs, comma separated (empty = none)"
+        default "6"
+        help
+            PWM channels take values 0..1000 (per mille duty).
+
+    config NODE_PWM_ACTIVE_LOW
+        bool "PWM output inverted (e.g. LED to VCC)"
+        default n
+
+    config NODE_RESET_GPIO
+        int "Button to forget gateway (hold 3 s), -1 to disable"
+        range -1 48
+        default 9 if IDF_TARGET_ESP32C3
+        default 0
+
+endmenu

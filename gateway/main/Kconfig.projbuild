@@ -1,0 +1,16 @@
+menu "Gateway"
+
+    config GW_DEFAULT_CHANNEL
+        int "ESP-NOW channel when no router is configured"
+        range 1 13
+        default 1
+        help
+            Once connected to a router, the gateway follows the router's channel
+            and nodes find it by scanning.
+
+    config GW_MAX_NODES
+        int "Maximum number of paired nodes"
+        range 1 17
+        default 16
+
+endmenu

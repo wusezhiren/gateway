@@ -1,0 +1,21 @@
+menu "Mesh protocol (ESP-NOW)"
+
+    config MP_ENCRYPT
+        bool "Encrypt unicast ESP-NOW frames"
+        default y
+        help
+            Gateway and nodes add each other as encrypted peers after pairing.
+            Broadcast JOIN frames are always unencrypted.
+            ESP-NOW supports at most 17 encrypted peers.
+
+    config MP_PMK
+        string "Primary master key (exactly 16 chars)"
+        default "esp-s3-mesh-pmk!"
+        depends on MP_ENCRYPT
+
+    config MP_LMK
+        string "Local master key (exactly 16 chars)"
+        default "esp-s3-mesh-lmk!"
+        depends on MP_ENCRYPT
+
+endmenu

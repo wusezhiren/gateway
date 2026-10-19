@@ -87,16 +87,18 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 
 已有代码草稿：协议组件、网关（Wi-Fi、节点表、配对、命令重传、串口命令）、节点（扫描入网、心跳、继电器/PWM）。
 
-- [ ] 修复编译（`main` 补 `esp_timer` 依赖），网关 S3、节点 S3/C3 三份构建全部通过
-- [ ] 按上表建立网关、节点分区表
-- [ ] 开启 `BOOTLOADER_APP_ROLLBACK_ENABLE`
+- [x] 修复编译（`main` 补 `esp_timer` 依赖），网关 S3、节点 S3/C3 三份构建全部通过
+- [x] 按上表建立网关、节点分区表
+- [x] 开启 `BOOTLOADER_APP_ROLLBACK_ENABLE`
   - 节点：新固件入网并收到首个 HB_ACK 后 `esp_ota_mark_app_valid_cancel_rollback()`，60s 内未完成则回滚重启
   - 网关：ESP-NOW 链路启动且 Wi-Fi 连上（或未配置路由器）后标记有效
-- [ ] 开启签名校验：`SECURE_SIGNED_APPS_NO_SECURE_BOOT` + `SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT`
-- [ ] 入网消息上报固件版本（`esp_app_desc_t.version`）、芯片型号、工程名
-- [ ] 节点通道值存 NVS，上电立即恢复；网关记录期望状态，节点重新入网后补发
-- [ ] 协议文档 `docs/protocol.md`
-- [ ] 验证：Korvo 烧网关固件，串口命令 `pair / nodes / set / unpair / wifi` 可用；节点到货后联调配对、控制、掉线重连
+- [x] 开启签名校验：`SECURE_SIGNED_APPS_NO_SECURE_BOOT` + `SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT`
+- [x] 入网消息上报固件版本（`esp_app_desc_t.version`）、芯片型号、工程名
+- [x] 节点通道值存 NVS，上电立即恢复；网关记录期望状态，节点重新入网后补发
+- [x] 协议文档 `docs/protocol.md`
+- [x] 验证：Korvo 烧网关固件，启动、分区表、签名、串口命令 `pair / nodes / set / wifi` 正常（控制台走原生 USB）
+- [ ] 节点到货后联调：配对、控制、掉线重连、状态恢复、解绑
+- [ ] 回滚验证留到阶段 3（需要 OTA 才能产生待确认镜像）
 
 ## 阶段 2：配网
 
@@ -134,6 +136,8 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 
 - 配网期间 ESP-NOW 照常工作；连上路由器后信道变化，节点会自动重新扫描入网
 - 串口 `wifi set` 命令保留作调试用
+- **已知问题（阶段 1 实测）**：已配置路由器但连不上时，STA 重连扫描会让网关在各信道间跳动，期间 ESP-NOW 收不到节点。
+  改为连续失败后指数退避重试（上限如 5 分钟），重试间隙停留在上次信道，保证节点可用
 
 ## 阶段 3：局域网 OTA
 

@@ -27,7 +27,7 @@ static lv_obj_t *kv_row(lv_obj_t *card, const char *key)
 
 /* ================= 概览 ================= */
 
-static lv_obj_t *s_ov_net_title, *s_ov_ip, *s_ov_rssi, *s_ov_ch;
+static lv_obj_t *s_ov_net_title, *s_ov_ip, *s_ov_rssi, *s_ov_ch, *s_ov_cloud;
 static lv_obj_t *s_ov_nodes, *s_ov_fw, *s_ov_uptime;
 
 static lv_obj_t *stat_tile(lv_obj_t *parent, const char *title, lv_obj_t **value)
@@ -49,6 +49,7 @@ void ui_overview_create(lv_obj_t *tile)
     s_ov_ip = kv_row(net, "IP 地址");
     s_ov_rssi = kv_row(net, "信号");
     s_ov_ch = kv_row(net, "信道");
+    s_ov_cloud = kv_row(net, "云端");
 
     lv_obj_t *row = lv_obj_create(tile);
     lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
@@ -79,6 +80,10 @@ void ui_overview_update(void)
         lv_label_set_text(s_ov_rssi, "-");
     }
     lv_label_set_text_fmt(s_ov_ch, "%d", w->channel);
+    const gw_cloud_status_t *c = &g_ui.cloud;
+    lv_label_set_text(s_ov_cloud, !c->configured ? "未配置" : c->connected ? "已连接"
+                                  : c->error[0] ? c->error : "连接中…");
+    lv_obj_set_style_text_color(s_ov_cloud, !c->configured ? UI_C_SUB : c->connected ? UI_C_OK : UI_C_WARN, 0);
 
     lv_label_set_text_fmt(s_ov_nodes, "%d / %d", g_ui.node_online, g_ui.node_total);
     lv_obj_set_style_text_color(s_ov_nodes,

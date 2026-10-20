@@ -285,6 +285,7 @@ static void refresh_model(void)
     gw_wifi_get_status(&g_ui.wifi);
     gw_prov_get_status(&g_ui.prov);
     gw_ota_get_status(&g_ui.ota);
+    gw_cloud_get_status(&g_ui.cloud);
     gw_link_snapshot(g_ui.nodes);
     g_ui.node_total = g_ui.node_online = 0;
     for (int i = 0; i < GW_MAX_NODES; i++) {

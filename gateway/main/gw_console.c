@@ -24,6 +24,7 @@
 #include "gw_keys.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
+#include "gw_cloud.h"
 #include "gw_link.h"
 #include "gw_ota.h"
 #include "gw_prov.h"
@@ -178,6 +179,30 @@ static int cmd_token(int argc, char **argv)
     return 0;
 }
 
+static int cmd_cloud(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "off") == 0) {
+        return gw_cloud_config("", 8883, "", "") == ESP_OK ? 0 : 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "set") == 0) {
+        if (argc != 6) {
+            printf("usage: cloud set <host> <port> <user> <pass>\n");
+            return 1;
+        }
+        return gw_cloud_config(argv[2], atoi(argv[3]), argv[4], argv[5]) == ESP_OK ? 0 : 1;
+    }
+    gw_cloud_status_t st;
+    gw_cloud_get_status(&st);
+    printf("id: %s\n", gw_cloud_id());
+    if (!st.configured) {
+        printf("not configured\n");
+        return 0;
+    }
+    printf("broker: %s:%u user=%s\n%s %s\n", st.host, st.port, st.user,
+           st.connected ? "connected" : "disconnected", st.error);
+    return 0;
+}
+
 static int cmd_ota(int argc, char **argv)
 {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -227,6 +252,7 @@ void gw_console_start(void)
         {.command = "prov",   .help = "prov [start|stop|status], provisioning softap", .func = cmd_prov},
         {.command = "keys",   .help = "keys [on|off], log key ADC readings", .func = cmd_keys},
         {.command = "token",  .help = "Print API token for app / OTA", .func = cmd_token},
+        {.command = "cloud",  .help = "cloud [status|set <host> <port> <user> <pass>|off]", .func = cmd_cloud},
         {.command = "ota",    .help = "Show OTA status and partitions", .func = cmd_ota},
         {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
     };

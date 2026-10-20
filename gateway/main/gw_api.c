@@ -8,10 +8,17 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "esp_app_desc.h"
+#include "esp_ota_ops.h"
+#include "esp_wifi.h"
+#include "freertos/semphr.h"
 #include "gw_api.h"
+#include "gw_cloud.h"
 #include "gw_http.h"
 #include "gw_link.h"
+#include "gw_ota.h"
 #include "gw_prov.h"
+#include "gw_wifi.h"
 
 static const char *TAG = "gw_api";
 
@@ -95,25 +102,6 @@ static bool parse_mac(const char *s, uint8_t mac[6])
     return true;
 }
 
-/* 按 MAC 找节点下标；找不到时已回复 404，返回 -1 */
-static int find_node(httpd_req_t *req, cJSON *body, gw_node_t *nodes)
-{
-    uint8_t mac[6];
-    const cJSON *m = cJSON_GetObjectItem(body, "mac");
-    if (!parse_mac(cJSON_GetStringValue(m), mac)) {
-        gw_http_error(req, "400 Bad Request", "bad_mac");
-        return -1;
-    }
-    gw_link_snapshot(nodes);
-    for (int i = 0; i < GW_MAX_NODES; i++) {
-        if (nodes[i].used && memcmp(nodes[i].mac, mac, 6) == 0) {
-            return i;
-        }
-    }
-    gw_http_error(req, "404 Not Found", "no_such_node");
-    return -1;
-}
-
 static const char *ch_type_name(uint8_t t)
 {
     switch (t) {
@@ -133,19 +121,16 @@ static const char *chip_name(uint8_t chip)
     }
 }
 
-/* 节点表放静态区，避免占 httpd 栈；httpd 单任务，处理函数不会并发 */
+/* 节点表放静态区，避免占调用方栈；HTTP 与云端两个任务都会用，加锁 */
 static gw_node_t s_nodes[GW_MAX_NODES];
+static SemaphoreHandle_t s_nodes_mtx;
 
-/* ---------- 节点 ---------- */
+#define NODES_LOCK()   xSemaphoreTake(s_nodes_mtx, portMAX_DELAY)
+#define NODES_UNLOCK() xSemaphoreGive(s_nodes_mtx)
 
-static esp_err_t nodes_get(httpd_req_t *req)
+static void add_nodes(cJSON *o)
 {
-    if (!gw_http_authorized(req)) {
-        return ESP_OK;
-    }
-    gw_link_snapshot(s_nodes);
     int64_t now = esp_timer_get_time();
-    cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "pair_left", gw_link_pair_remaining());
     cJSON *arr = cJSON_AddArrayToObject(o, "nodes");
     for (int i = 0; i < GW_MAX_NODES; i++) {
@@ -179,62 +164,246 @@ static esp_err_t nodes_get(httpd_req_t *req)
         }
         cJSON_AddItemToArray(arr, j);
     }
-    return send_json(req, o);
+}
+
+cJSON *gw_api_nodes_json(void)
+{
+    cJSON *o = cJSON_CreateObject();
+    NODES_LOCK();
+    gw_link_snapshot(s_nodes);
+    add_nodes(o);
+    NODES_UNLOCK();
+    return o;
+}
+
+cJSON *gw_api_info_json(void)
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    gw_wifi_status_t ws;
+    gw_wifi_get_status(&ws);
+    gw_ota_status_t os;
+    gw_ota_get_status(&os);
+    gw_cloud_status_t cs;
+    gw_cloud_get_status(&cs);
+    int total = 0, online = 0;
+    NODES_LOCK();
+    gw_link_snapshot(s_nodes);
+    for (int i = 0; i < GW_MAX_NODES; i++) {
+        total += s_nodes[i].used;
+        online += s_nodes[i].used && s_nodes[i].online;
+    }
+    NODES_UNLOCK();
+    uint8_t mac[6];
+    char mac_str[18];
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    snprintf(mac_str, sizeof(mac_str), MACSTR, MAC2STR(mac));
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "project", app->project_name);
+    cJSON_AddStringToObject(o, "version", app->version);
+    cJSON_AddStringToObject(o, "partition", esp_ota_get_running_partition()->label);
+    cJSON_AddStringToObject(o, "idf", app->idf_ver);
+    cJSON_AddStringToObject(o, "mac", mac_str);
+    cJSON_AddNumberToObject(o, "uptime_s", (double)(esp_timer_get_time() / 1000000));
+    cJSON *w = cJSON_AddObjectToObject(o, "wifi");
+    cJSON_AddStringToObject(w, "ssid", ws.ssid);
+    cJSON_AddBoolToObject(w, "connected", ws.connected);
+    cJSON_AddStringToObject(w, "ip", ws.ip);
+    cJSON_AddNumberToObject(w, "rssi", ws.rssi);
+    cJSON_AddNumberToObject(w, "channel", ws.channel);
+    cJSON *n = cJSON_AddObjectToObject(o, "nodes");
+    cJSON_AddNumberToObject(n, "total", total);
+    cJSON_AddNumberToObject(n, "online", online);
+    cJSON_AddNumberToObject(n, "pair_left", gw_link_pair_remaining());
+    cJSON *ota = cJSON_AddObjectToObject(o, "ota");
+    cJSON_AddStringToObject(ota, "state", gw_ota_state_name(os.state));
+    cJSON_AddNumberToObject(ota, "received", os.received);
+    cJSON_AddNumberToObject(ota, "total", os.total);
+    if (os.version[0]) {
+        cJSON_AddStringToObject(ota, "version", os.version);
+    }
+    if (os.error[0]) {
+        cJSON_AddStringToObject(ota, "error", os.error);
+    }
+    cJSON *c = cJSON_AddObjectToObject(o, "cloud");
+    cJSON_AddBoolToObject(c, "configured", cs.configured);
+    cJSON_AddBoolToObject(c, "connected", cs.connected);
+    cJSON_AddStringToObject(c, "id", gw_cloud_id());
+    return o;
+}
+
+bool gw_api_token_ok(const char *tok)
+{
+    const char *token = gw_prov_api_token();
+    if (!tok || !token[0] || strlen(tok) != strlen(token)) {
+        return false;
+    }
+    /* 定长比较，不因提前退出泄露匹配位置 */
+    uint8_t diff = 0;
+    for (size_t i = 0; token[i]; i++) {
+        diff |= (uint8_t)(tok[i] ^ token[i]);
+    }
+    return diff == 0;
+}
+
+/* ---------- 命令（HTTP 与云端共用），成功返回 NULL，否则返回错误码 ---------- */
+
+static const char *find_node_idx(const cJSON *body, int *idx)
+{
+    uint8_t mac[6];
+    if (!parse_mac(cJSON_GetStringValue(cJSON_GetObjectItem(body, "mac")), mac)) {
+        return "bad_mac";
+    }
+    for (int i = 0; i < GW_MAX_NODES; i++) {
+        if (s_nodes[i].used && memcmp(s_nodes[i].mac, mac, 6) == 0) {
+            *idx = i;
+            return NULL;
+        }
+    }
+    return "no_such_node";
+}
+
+static const char *op_set(const cJSON *body)
+{
+    int idx;
+    NODES_LOCK();
+    gw_link_snapshot(s_nodes);
+    const char *err = find_node_idx(body, &idx);
+    if (!err) {
+        const cJSON *ch = cJSON_GetObjectItem(body, "ch");
+        const cJSON *val = cJSON_GetObjectItem(body, "value");
+        const gw_node_t *n = &s_nodes[idx];
+        if (!cJSON_IsNumber(ch) || !cJSON_IsNumber(val) || ch->valueint < 0 || ch->valueint >= n->n_ch ||
+            val->valuedouble < 0 || val->valuedouble > n->ch[ch->valueint].max) {
+            err = "bad_channel_or_value";
+        } else {
+            esp_err_t e = gw_link_set(idx, (uint8_t)ch->valueint, (uint16_t)val->valueint);
+            err = e == ESP_OK ? NULL : e == ESP_ERR_INVALID_STATE ? "offline" : "bad_channel_or_value";
+        }
+    }
+    NODES_UNLOCK();
+    return err;
+}
+
+static const char *op_unpair(const cJSON *body)
+{
+    int idx;
+    NODES_LOCK();
+    gw_link_snapshot(s_nodes);
+    const char *err = find_node_idx(body, &idx);
+    NODES_UNLOCK();
+    if (!err && gw_link_unpair(idx) != ESP_OK) {
+        err = "unpair_failed";
+    }
+    return err;
+}
+
+static const char *op_pair(const cJSON *body)
+{
+    const cJSON *sec = cJSON_GetObjectItem(body, "seconds");
+    int s = cJSON_IsNumber(sec) ? sec->valueint : -1;
+    if (s < 0 || s > 300) {
+        return "bad_seconds";
+    }
+    gw_link_pair((uint32_t)s);
+    return NULL;
+}
+
+const char *gw_api_exec(const cJSON *cmd)
+{
+    const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "op"));
+    if (!op) {
+        return "bad_op";
+    }
+    if (strcmp(op, "set") == 0) {
+        return op_set(cmd);
+    } else if (strcmp(op, "unpair") == 0) {
+        return op_unpair(cmd);
+    } else if (strcmp(op, "pair") == 0) {
+        return op_pair(cmd);
+    } else if (strcmp(op, "get") == 0) {
+        return NULL;
+    }
+    return "bad_op";
+}
+
+static const char *http_status(const char *err)
+{
+    if (strcmp(err, "no_such_node") == 0) {
+        return "404 Not Found";
+    } else if (strcmp(err, "offline") == 0) {
+        return "409 Conflict";
+    } else if (strcmp(err, "unpair_failed") == 0) {
+        return "500 Internal Server Error";
+    }
+    return "400 Bad Request";
+}
+
+/* ---------- 节点 ---------- */
+
+static esp_err_t nodes_get(httpd_req_t *req)
+{
+    if (!gw_http_authorized(req)) {
+        return ESP_OK;
+    }
+    return send_json(req, gw_api_nodes_json());
+}
+
+/* POST 命令：读 JSON 请求体，执行 op */
+static esp_err_t op_post(httpd_req_t *req, const char *(*op)(const cJSON *))
+{
+    if (!gw_http_authorized(req)) {
+        return ESP_OK;
+    }
+    cJSON *body = recv_json(req);
+    if (!body) {
+        return ESP_OK;
+    }
+    const char *err = op(body);
+    cJSON_Delete(body);
+    if (err) {
+        return gw_http_error(req, http_status(err), err);
+    }
+    gw_cloud_notify();
+    return send_ok(req);
 }
 
 static esp_err_t set_post(httpd_req_t *req)
 {
-    if (!gw_http_authorized(req)) {
-        return ESP_OK;
-    }
-    cJSON *body = recv_json(req);
-    if (!body) {
-        return ESP_OK;
-    }
-    int idx = find_node(req, body, s_nodes);
-    if (idx < 0) {
-        cJSON_Delete(body);
-        return ESP_OK;
-    }
-    const cJSON *ch = cJSON_GetObjectItem(body, "ch");
-    const cJSON *val = cJSON_GetObjectItem(body, "value");
-    const gw_node_t *n = &s_nodes[idx];
-    if (!cJSON_IsNumber(ch) || !cJSON_IsNumber(val) || ch->valueint < 0 || ch->valueint >= n->n_ch ||
-        val->valuedouble < 0 || val->valuedouble > n->ch[ch->valueint].max) {
-        cJSON_Delete(body);
-        return gw_http_error(req, "400 Bad Request", "bad_channel_or_value");
-    }
-    esp_err_t err = gw_link_set(idx, (uint8_t)ch->valueint, (uint16_t)val->valueint);
-    cJSON_Delete(body);
-    if (err == ESP_ERR_INVALID_STATE) {
-        return gw_http_error(req, "409 Conflict", "offline");
-    } else if (err != ESP_OK) {
-        return gw_http_error(req, "400 Bad Request", "bad_channel_or_value");
-    }
-    return send_ok(req);
+    return op_post(req, op_set);
 }
 
 static esp_err_t unpair_post(httpd_req_t *req)
 {
-    if (!gw_http_authorized(req)) {
-        return ESP_OK;
-    }
-    cJSON *body = recv_json(req);
-    if (!body) {
-        return ESP_OK;
-    }
-    int idx = find_node(req, body, s_nodes);
-    cJSON_Delete(body);
-    if (idx < 0) {
-        return ESP_OK;
-    }
-    if (gw_link_unpair(idx) != ESP_OK) {
-        return gw_http_error(req, "500 Internal Server Error", "unpair_failed");
-    }
-    return send_ok(req);
+    return op_post(req, op_unpair);
 }
 
 static esp_err_t pair_post(httpd_req_t *req)
+{
+    return op_post(req, op_pair);
+}
+
+/* ---------- 云端配置 ---------- */
+
+static esp_err_t cloud_get(httpd_req_t *req)
+{
+    if (!gw_http_authorized(req)) {
+        return ESP_OK;
+    }
+    gw_cloud_status_t cs;
+    gw_cloud_get_status(&cs);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "configured", cs.configured);
+    cJSON_AddBoolToObject(o, "connected", cs.connected);
+    cJSON_AddStringToObject(o, "id", gw_cloud_id());
+    cJSON_AddStringToObject(o, "host", cs.host);
+    cJSON_AddNumberToObject(o, "port", cs.port);
+    cJSON_AddStringToObject(o, "username", cs.user);
+    cJSON_AddStringToObject(o, "error", cs.error);
+    return send_json(req, o);
+}
+
+static esp_err_t cloud_post(httpd_req_t *req)
 {
     if (!gw_http_authorized(req)) {
         return ESP_OK;
@@ -243,13 +412,16 @@ static esp_err_t pair_post(httpd_req_t *req)
     if (!body) {
         return ESP_OK;
     }
-    const cJSON *sec = cJSON_GetObjectItem(body, "seconds");
-    int s = cJSON_IsNumber(sec) ? sec->valueint : -1;
+    const char *host = cJSON_GetStringValue(cJSON_GetObjectItem(body, "host"));
+    const char *user = cJSON_GetStringValue(cJSON_GetObjectItem(body, "username"));
+    const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(body, "password"));
+    const cJSON *port = cJSON_GetObjectItem(body, "port");
+    esp_err_t err = gw_cloud_config(host ? host : "", cJSON_IsNumber(port) ? port->valueint : 8883,
+                                    user ? user : "", pass ? pass : "");
     cJSON_Delete(body);
-    if (s < 0 || s > 300) {
-        return gw_http_error(req, "400 Bad Request", "bad_seconds");
+    if (err != ESP_OK) {
+        return gw_http_error(req, "400 Bad Request", "bad_config");
     }
-    gw_link_pair((uint32_t)s);
     return send_ok(req);
 }
 
@@ -381,7 +553,10 @@ void gw_api_bind_decide(bool allow)
 
 esp_err_t gw_api_register(httpd_handle_t httpd)
 {
+    s_nodes_mtx = xSemaphoreCreateMutex();
     const httpd_uri_t uris[] = {
+        {.uri = "/api/cloud", .method = HTTP_GET, .handler = cloud_get},
+        {.uri = "/api/cloud", .method = HTTP_POST, .handler = cloud_post},
         {.uri = "/api/nodes", .method = HTTP_GET, .handler = nodes_get},
         {.uri = "/api/nodes/set", .method = HTTP_POST, .handler = set_post},
         {.uri = "/api/nodes/unpair", .method = HTTP_POST, .handler = unpair_post},

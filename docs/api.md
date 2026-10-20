@@ -18,7 +18,8 @@ token 为 32 位十六进制，配网成功时由 `/api/prov/status` 返回，�
  "mac": "44:bd:8d:f3:1b:70", "uptime_s": 39,
  "wifi": {"ssid": "...", "connected": true, "ip": "192.168.32.222", "rssi": -26, "channel": 11},
  "nodes": {"total": 0, "online": 0, "pair_left": 0},
- "ota": {"state": "idle", "received": 0, "total": 0}}
+ "ota": {"state": "idle", "received": 0, "total": 0},
+ "cloud": {"configured": true, "connected": true, "id": "44bd8df31b70"}}
 ```
 
 `ota.state`：`idle` / `receiving` / `rebooting` / `failed`（附 `error`），`version` 为目标版本。
@@ -84,6 +85,24 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 ### `POST /api/pair`
 
 `{"seconds": 60}` 打开配对窗口（0~300，0 立即关闭）。剩余秒数见 `/api/nodes` 的 `pair_left` 或 `/api/info` 的 `nodes.pair_left`。
+
+## 云端配置（需鉴权）
+
+协议见 [cloud.md](cloud.md)。
+
+### `GET /api/cloud`
+
+```json
+{"configured": true, "connected": false, "id": "44bd8df31b70",
+ "host": "xxxx.emqxsl.cn", "port": 8883, "username": "espgw", "error": "auth_failed"}
+```
+
+`error`：最近一次连接失败原因（`auth_failed` / `tls_failed` / `connect_failed`），连上后清空。不返回密码。
+
+### `POST /api/cloud`
+
+`{"host": "xxxx.emqxsl.cn", "port": 8883, "username": "espgw", "password": "***"}` → `{"ok": true}`，
+保存后立即重连。`host` 为空表示关闭并清除配置。
 
 ## 网关 OTA（阶段 3a）
 

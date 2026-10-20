@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "lvgl.h"
+#include "gw_cloud.h"
 #include "gw_link.h"
 #include "gw_ota.h"
 #include "gw_prov.h"
@@ -31,6 +32,7 @@ typedef struct {
     gw_wifi_status_t wifi;
     gw_prov_status_t prov;
     gw_ota_status_t ota;
+    gw_cloud_status_t cloud;
     gw_node_t nodes[GW_MAX_NODES];
     int node_total;
     int node_online;

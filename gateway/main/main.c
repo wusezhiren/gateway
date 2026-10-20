@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "gw_api.h"
+#include "gw_cloud.h"
 #include "gw_display.h"
 #include "gw_http.h"
 #include "gw_keys.h"
@@ -35,6 +36,7 @@ static void on_event(gw_event_t ev, int idx)
         [GW_EV_SET_FAILED] = "set_failed",
     };
     ESP_LOGI(TAG, "event %s node %d", names[ev], idx);
+    gw_cloud_notify();
 }
 
 static bool s_ui_ok;
@@ -54,12 +56,14 @@ static void on_key(gw_key_t key, gw_key_event_t ev)
 static void on_prov(const gw_prov_status_t *st)
 {
     ESP_LOGI(TAG, "provisioning %s", gw_prov_state_name(st->state));
+    gw_cloud_notify();
 }
 
 static void on_ota(const gw_ota_status_t *st)
 {
     ESP_LOGI(TAG, "ota %s v%s %lu/%lu %s", gw_ota_state_name(st->state), st->version,
              (unsigned long)st->received, (unsigned long)st->total, st->error);
+    gw_cloud_notify();
 }
 
 #define VALIDATE_TIMEOUT_S 120
@@ -144,6 +148,7 @@ void app_main(void)
     esp_netif_sntp_init(&sntp);
     gw_link_set_event_cb(on_event);
     ESP_ERROR_CHECK(gw_link_start());
+    ESP_ERROR_CHECK(gw_cloud_init());
     ESP_ERROR_CHECK(gw_http_start());
     gw_ota_set_cb(on_ota);
     ESP_ERROR_CHECK(gw_prov_init(on_prov));

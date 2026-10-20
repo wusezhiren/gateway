@@ -1,17 +1,10 @@
+#include <stdlib.h>
 #include <string.h>
 #include "cJSON.h"
-#include "esp_app_desc.h"
 #include "esp_log.h"
-#include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "esp_timer.h"
-#include "esp_wifi.h"
 #include "gw_api.h"
 #include "gw_http.h"
-#include "gw_link.h"
 #include "gw_ota.h"
-#include "gw_prov.h"
-#include "gw_wifi.h"
 
 static const char *TAG = "gw_http";
 
@@ -29,17 +22,9 @@ esp_err_t gw_http_error(httpd_req_t *req, const char *status, const char *msg)
 bool gw_http_authorized(httpd_req_t *req)
 {
     char hdr[48];
-    const char *token = gw_prov_api_token();
-    if (token[0] && httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK &&
-        strncmp(hdr, "Bearer ", 7) == 0 && strlen(hdr + 7) == strlen(token)) {
-        /* 定长比较，不因提前退出泄露匹配长度 */
-        uint8_t diff = 0;
-        for (size_t i = 0; token[i]; i++) {
-            diff |= (uint8_t)(hdr[7 + i] ^ token[i]);
-        }
-        if (diff == 0) {
-            return true;
-        }
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK &&
+        strncmp(hdr, "Bearer ", 7) == 0 && gw_api_token_ok(hdr + 7)) {
+        return true;
     }
     gw_http_error(req, "401 Unauthorized", "unauthorized");
     return false;
@@ -47,51 +32,7 @@ bool gw_http_authorized(httpd_req_t *req)
 
 static esp_err_t info_get(httpd_req_t *req)
 {
-    const esp_app_desc_t *app = esp_app_get_description();
-    gw_wifi_status_t ws;
-    gw_wifi_get_status(&ws);
-    gw_ota_status_t os;
-    gw_ota_get_status(&os);
-    static gw_node_t nodes[GW_MAX_NODES];
-    gw_link_snapshot(nodes);
-    int total = 0, online = 0;
-    for (int i = 0; i < GW_MAX_NODES; i++) {
-        total += nodes[i].used;
-        online += nodes[i].used && nodes[i].online;
-    }
-    uint8_t mac[6];
-    char mac_str[18];
-    esp_wifi_get_mac(WIFI_IF_STA, mac);
-    snprintf(mac_str, sizeof(mac_str), MACSTR, MAC2STR(mac));
-
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "project", app->project_name);
-    cJSON_AddStringToObject(o, "version", app->version);
-    cJSON_AddStringToObject(o, "partition", esp_ota_get_running_partition()->label);
-    cJSON_AddStringToObject(o, "idf", app->idf_ver);
-    cJSON_AddStringToObject(o, "mac", mac_str);
-    cJSON_AddNumberToObject(o, "uptime_s", (double)(esp_timer_get_time() / 1000000));
-    cJSON *w = cJSON_AddObjectToObject(o, "wifi");
-    cJSON_AddStringToObject(w, "ssid", ws.ssid);
-    cJSON_AddBoolToObject(w, "connected", ws.connected);
-    cJSON_AddStringToObject(w, "ip", ws.ip);
-    cJSON_AddNumberToObject(w, "rssi", ws.rssi);
-    cJSON_AddNumberToObject(w, "channel", ws.channel);
-    cJSON *n = cJSON_AddObjectToObject(o, "nodes");
-    cJSON_AddNumberToObject(n, "total", total);
-    cJSON_AddNumberToObject(n, "online", online);
-    cJSON_AddNumberToObject(n, "pair_left", gw_link_pair_remaining());
-    cJSON *ota = cJSON_AddObjectToObject(o, "ota");
-    cJSON_AddStringToObject(ota, "state", gw_ota_state_name(os.state));
-    cJSON_AddNumberToObject(ota, "received", os.received);
-    cJSON_AddNumberToObject(ota, "total", os.total);
-    if (os.version[0]) {
-        cJSON_AddStringToObject(ota, "version", os.version);
-    }
-    if (os.error[0]) {
-        cJSON_AddStringToObject(ota, "error", os.error);
-    }
-
+    cJSON *o = gw_api_info_json();
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (!s) {

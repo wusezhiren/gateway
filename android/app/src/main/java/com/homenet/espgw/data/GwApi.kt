@@ -75,6 +75,18 @@ class GwApi(
 
     suspend fun nodes(): NodeList = NodeList.parse(JSONObject(request("GET", "/api/nodes")))
 
+    /** 网关当前的云端配置（需 token），未配置返回 null */
+    suspend fun getCloud(): CloudConfig? {
+        val o = JSONObject(request("GET", "/api/cloud"))
+        if (!o.optBoolean("configured")) return null
+        return CloudConfig(
+            host = o.optString("host"),
+            port = o.optInt("port", 8883),
+            username = o.optString("username"),
+            password = o.optString("password"),
+        )
+    }
+
     /** 把云端 broker 配置下发给网关（host 为空表示关闭） */
     suspend fun setCloud(cfg: CloudConfig) {
         request("POST", "/api/cloud", cfg.toJson())

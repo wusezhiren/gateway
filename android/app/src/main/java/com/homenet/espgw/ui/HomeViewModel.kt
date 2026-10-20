@@ -81,6 +81,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private var cloudJobs = mutableListOf<Job>()
     private var lanFailures = 0
     private var lastLanTry = 0L
+    /** 本次局域网连上后是否已和网关同步过云端配置 */
+    private var cloudSynced = false
 
     private val cm = app.getSystemService(ConnectivityManager::class.java)
     private var netCallback: ConnectivityManager.NetworkCallback? = null
@@ -100,6 +102,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             nodes = emptyList()
             linkError = null
             lanFailures = 0
+            cloudSynced = false
             restartCloud()
         }
     }
@@ -143,6 +146,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun onNetworkChanged() {
+        cloudSynced = false
         transport = Transport.None
         lanOk = false
         lanFailures = 0
@@ -243,6 +247,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             lanFailures = 0
             lanOk = true
             transport = Transport.Lan
+            if (!cloudSynced) syncCloudFromGateway(api, i)
             (ota as? OtaUi.Rebooting)?.let {
                 if (i.version == it.version) ota = OtaUi.Done(it.version)
             }
@@ -268,6 +273,21 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             // 连续失败时用 mDNS 按 MAC 找一下，网关 IP 可能变了
             if (lanFailures == 3 && e !is ApiException) rediscover()
         }
+    }
+
+    /**
+     * 网关是云端配置的准：局域网连上时，网关配了云端而手机没有（或不一致），
+     * 就把网关的配置存到手机，用户只需配一次网关。
+     */
+    private suspend fun syncCloudFromGateway(api: GwApi, i: GwInfo) {
+        cloudSynced = true
+        if (!i.cloudConfigured) return
+        val gwCfg = runCatching { api.getCloud() }.getOrNull() ?: return
+        if (gwCfg.password.isEmpty() || gwCfg == cloudConfig) return
+        store.saveCloud(gwCfg)
+        cloudConfig = gwCfg
+        restartCloud()
+        message = "已从网关同步云端设置，离开局域网也能控制"
     }
 
     private suspend fun rediscover() {

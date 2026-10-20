@@ -44,6 +44,13 @@ void gw_cloud_get_status(gw_cloud_status_t *out)
     taskEXIT_CRITICAL(&s_lock);
 }
 
+void gw_cloud_get_password(char *out, size_t len)
+{
+    taskENTER_CRITICAL(&s_lock);
+    strlcpy(out, s_pass, len);
+    taskEXIT_CRITICAL(&s_lock);
+}
+
 static void set_connected(bool c, const char *err)
 {
     taskENTER_CRITICAL(&s_lock);
@@ -70,7 +77,7 @@ static void load_config(void)
 {
     nvs_handle_t h;
     gw_cloud_status_t st = {0};
-    s_pass[0] = '\0';
+    char pass[sizeof(s_pass)] = "";
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
         size_t len = sizeof(st.host);
         if (nvs_get_str(h, "host", st.host, &len) != ESP_OK) {
@@ -80,9 +87,9 @@ static void load_config(void)
         if (nvs_get_str(h, "user", st.user, &len) != ESP_OK) {
             st.user[0] = '\0';
         }
-        len = sizeof(s_pass);
-        if (nvs_get_str(h, "pass", s_pass, &len) != ESP_OK) {
-            s_pass[0] = '\0';
+        len = sizeof(pass);
+        if (nvs_get_str(h, "pass", pass, &len) != ESP_OK) {
+            pass[0] = '\0';
         }
         nvs_get_u16(h, "port", &st.port);
         nvs_close(h);
@@ -90,6 +97,7 @@ static void load_config(void)
     st.configured = st.host[0] != '\0';
     taskENTER_CRITICAL(&s_lock);
     s_st = st;
+    strlcpy(s_pass, pass, sizeof(s_pass));
     taskEXIT_CRITICAL(&s_lock);
 }
 

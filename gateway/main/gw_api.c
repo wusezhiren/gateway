@@ -399,6 +399,10 @@ static esp_err_t cloud_get(httpd_req_t *req)
     cJSON_AddStringToObject(o, "host", cs.host);
     cJSON_AddNumberToObject(o, "port", cs.port);
     cJSON_AddStringToObject(o, "username", cs.user);
+    /* 已鉴权的 App 本就能控制网关，下发密码让它自动同步云端配置 */
+    char pass[65];
+    gw_cloud_get_password(pass, sizeof(pass));
+    cJSON_AddStringToObject(o, "password", pass);
     cJSON_AddStringToObject(o, "error", cs.error);
     return send_json(req, o);
 }

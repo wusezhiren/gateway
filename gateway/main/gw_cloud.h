@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -24,6 +25,9 @@ esp_err_t gw_cloud_init(void);
 esp_err_t gw_cloud_config(const char *host, int port, const char *user, const char *pass);
 
 void gw_cloud_get_status(gw_cloud_status_t *out);
+
+/* 拷出 broker 密码（给已鉴权的 App 同步配置用） */
+void gw_cloud_get_password(char *out, size_t len);
 
 /* 网关 ID：STA MAC 小写不带冒号，topic 用 */
 const char *gw_cloud_id(void);

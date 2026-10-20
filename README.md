@@ -98,4 +98,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 - 新网关：App 内连接热点配网，成功后自动保存地址和 token
 - 已联网网关：App 通过 mDNS 查找（或手动输入 IP），在网关屏幕上点“允许”完成绑定
+- 发版：`tools/release_app.py <版本> --notes "说明"`，自动编译网关固件并内置进 App、用发布签名打包、
+  上传到公开发布仓库 https://gitee.com/yu_ji_hai/app_release ，并通过云端通知在线的 App；
+  App 启动时检查 `version.json` 自动更新，固件页提示“升级到 vX”把内置固件推给网关。
+  凭据在 `local/`（不上传）：`gitee_token`、`keystore.properties`/`release.keystore`（**务必备份**）、`cloud.json`
 - 外网访问：网关和 App 都连云端 MQTT（EMQX Cloud），在 App「网关 → 云端设置」填写，见 [docs/cloud.md](docs/cloud.md)

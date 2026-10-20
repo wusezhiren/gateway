@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.homenet.espgw.ui.theme.OkGreen
 
 @Composable
-fun GatewayTab(vm: HomeViewModel, onAddGateway: () -> Unit) {
+fun GatewayTab(vm: HomeViewModel, upd: UpdateViewModel, onAddGateway: () -> Unit) {
     val info = vm.info
     val gw = vm.gateway
     var confirmForget by remember { mutableStateOf(false) }
@@ -62,6 +62,12 @@ fun GatewayTab(vm: HomeViewModel, onAddGateway: () -> Unit) {
         }
         CloudCard(vm)
         SectionCard("手机") {
+            InfoRow("App 版本", "v${upd.currentVersion}")
+            OutlinedButton(
+                onClick = { upd.check(manual = true) },
+                enabled = !upd.checking,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) { Text(if (upd.checking) "正在检查…" else "检查更新") }
             OutlinedButton(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) {
                 Text("重新配网 / 更换网关")
             }

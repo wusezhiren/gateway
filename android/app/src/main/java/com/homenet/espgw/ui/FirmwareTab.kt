@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -35,6 +36,11 @@ fun FirmwareTab(vm: HomeViewModel) {
         SectionCard("网关固件") {
             InfoRow("当前版本", info?.let { "v${it.version}" } ?: "—")
             InfoRow("运行分区", info?.partition ?: "—")
+            InfoRow(
+                "App 内置",
+                vm.bundledGateway?.let { "v${it.version}" + if (vm.gatewayUpgradable) "（可升级）" else "" } ?: "无",
+                if (vm.gatewayUpgradable) OkGreen else androidx.compose.ui.graphics.Color.Unspecified,
+            )
             Text(
                 "选择签名后的网关固件（esp_s3_gateway.bin）。网关会校验签名，升级后自动重启，失败会自动回滚。",
                 style = MaterialTheme.typography.bodySmall,
@@ -62,18 +68,28 @@ fun FirmwareTab(vm: HomeViewModel) {
                 is OtaUi.NeedForce -> {
                     Text("所选固件版本不高于网关当前版本", color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = 12.dp))
-                    TextButton(onClick = { vm.uploadFirmware(ota.uri, force = true) }) { Text("仍然安装（降级）") }
+                    TextButton(onClick = { ota.retry() }) { Text("仍然安装（降级）") }
                 }
                 OtaUi.Idle -> Unit
             }
-            Button(
+            vm.bundledGateway?.takeIf { vm.gatewayUpgradable }?.let { fw ->
+                Button(
+                    onClick = {
+                        vm.ota = OtaUi.Idle
+                        vm.upgradeBundled()
+                    },
+                    enabled = !busy && vm.lanOk,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                ) { Text("升级到 v${fw.version}") }
+            }
+            OutlinedButton(
                 onClick = {
                     vm.ota = OtaUi.Idle
                     pick.launch(arrayOf("application/octet-stream", "*/*"))
                 },
                 enabled = !busy && vm.lanOk,
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            ) { Text("选择固件并升级") }
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) { Text("选择其他固件文件") }
         }
         SectionCard("节点固件") {
             Text(

@@ -41,7 +41,7 @@ private val tabs = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(vm: HomeViewModel, onAddGateway: () -> Unit) {
+fun HomeScreen(vm: HomeViewModel, upd: UpdateViewModel, onAddGateway: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -49,6 +49,12 @@ fun HomeScreen(vm: HomeViewModel, onAddGateway: () -> Unit) {
     LifecycleResumeEffect(Unit) {
         vm.startPolling()
         onPauseOrDispose { vm.stopPolling() }
+    }
+    LaunchedEffect(upd.message) {
+        upd.message?.let {
+            snackbar.showSnackbar(it)
+            upd.message = null
+        }
     }
     LaunchedEffect(vm.message) {
         vm.message?.let {
@@ -103,7 +109,7 @@ fun HomeScreen(vm: HomeViewModel, onAddGateway: () -> Unit) {
             Box(Modifier.weight(1f)) {
                 when (tab) {
                     0 -> NodesTab(vm)
-                    1 -> GatewayTab(vm, onAddGateway)
+                    1 -> GatewayTab(vm, upd, onAddGateway)
                     else -> FirmwareTab(vm)
                 }
             }

@@ -15,6 +15,8 @@ import com.homenet.espgw.data.ApiException
 import com.homenet.espgw.data.CloudConfig
 import com.homenet.espgw.data.CloudLink
 import com.homenet.espgw.data.Discovery
+import com.homenet.espgw.data.Firmware
+import com.homenet.espgw.data.FwImage
 import com.homenet.espgw.data.Gateway
 import com.homenet.espgw.data.GatewayStore
 import com.homenet.espgw.data.GwApi
@@ -22,11 +24,14 @@ import com.homenet.espgw.data.GwInfo
 import com.homenet.espgw.data.Node
 import com.homenet.espgw.data.userMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.InputStream
 
 sealed interface OtaUi {
     data object Idle : OtaUi
@@ -34,8 +39,8 @@ sealed interface OtaUi {
     data class Rebooting(val version: String) : OtaUi
     data class Done(val version: String) : OtaUi
     data class Failed(val msg: String) : OtaUi
-    /** 版本不高于当前，等用户确认是否强制 */
-    data class NeedForce(val uri: Uri) : OtaUi
+    /** 版本不高于当前，等用户确认是否强制；retry 以 force=1 重新上传 */
+    data class NeedForce(val retry: () -> Unit) : OtaUi
 }
 
 /** 当前通过哪条链路和网关通信 */
@@ -75,6 +80,18 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     /** 一次性提示（snackbar），显示后由界面清掉 */
     var message by mutableStateOf<String?>(null)
     var ota by mutableStateOf<OtaUi>(OtaUi.Idle)
+    /** App 内置的网关固件 */
+    var bundledGateway by mutableStateOf<FwImage?>(null)
+        private set
+    /** 云端通知的最新 App versionCode（发版脚本发布到 espgw/app/latest） */
+    var appLatestCode by mutableStateOf<Int?>(null)
+        private set
+
+    init {
+        viewModelScope.launch {
+            bundledGateway = withContext(Dispatchers.IO) { Firmware.bundledGateway(getApplication()) }
+        }
+    }
 
     private var pollJob: Job? = null
     private var cloud: CloudLink? = null
@@ -165,6 +182,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         link.start()
         cloudJobs += viewModelScope.launch { link.connected.collect { cloudConnected = it } }
         cloudJobs += viewModelScope.launch { link.error.collect { cloudError = it } }
+        cloudJobs += viewModelScope.launch { link.appLatest.collect { if (it != null) appLatestCode = it } }
         cloudJobs += viewModelScope.launch {
             link.state.collect { st ->
                 st ?: return@collect
@@ -334,19 +352,43 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 网关升级（仅局域网） ----------
 
+    /** 从手机选择的固件文件升级 */
     fun uploadFirmware(uri: Uri, force: Boolean = false) {
-        val api = api() ?: return
         val cr = getApplication<Application>().contentResolver
+        upload(force, { uploadFirmware(uri, true) }) {
+            val size = cr.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else -1L
+            } ?: -1L
+            if (size <= 0) throw IllegalArgumentException("读不到文件大小")
+            size to (cr.openInputStream(uri) ?: throw IllegalArgumentException("打不开文件"))
+        }
+    }
+
+    /** 用 App 内置的网关固件升级 */
+    fun upgradeBundled(force: Boolean = false) {
+        val fw = bundledGateway ?: return
+        upload(force, { upgradeBundled(true) }) {
+            fw.size to Firmware.openBundledGateway(getApplication())
+        }
+    }
+
+    /** App 内置固件比网关当前版本新 */
+    val gatewayUpgradable: Boolean
+        get() {
+            val fw = bundledGateway ?: return false
+            val cur = info?.version ?: return false
+            return Firmware.compareVersions(fw.version, cur) > 0
+        }
+
+    private fun upload(force: Boolean, retryForce: () -> Unit, open: suspend () -> Pair<Long, InputStream>) {
+        val api = api() ?: return
         viewModelScope.launch {
             try {
-                val size = cr.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
-                    if (c.moveToFirst()) c.getLong(0) else -1L
-                } ?: -1L
-                if (size <= 0) throw IllegalArgumentException("读不到文件大小")
+                val (size, stream) = withContext(Dispatchers.IO) { open() }
                 ota = OtaUi.Uploading(0, size)
-                val version = cr.openInputStream(uri)?.use { input ->
+                val version = stream.use { input ->
                     api.otaGateway(input, size, force) { sent -> ota = OtaUi.Uploading(sent, size) }
-                } ?: throw IllegalArgumentException("打不开文件")
+                }
                 ota = OtaUi.Rebooting(version)
                 // 60 秒内没看到新版本算失败（可能被回滚）
                 delay(60_000)
@@ -354,7 +396,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
-                ota = if (e.error == "not_newer") OtaUi.NeedForce(uri) else OtaUi.Failed(e.userMessage())
+                ota = if (e.error == "not_newer") OtaUi.NeedForce(retryForce) else OtaUi.Failed(e.userMessage())
             } catch (e: Exception) {
                 ota = OtaUi.Failed(e.userMessage())
             }

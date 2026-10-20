@@ -47,6 +47,7 @@ class CloudLink(
     private val topicOnline = "espgw/$gwId/online"
     private val topicCmd = "espgw/$gwId/cmd"
     private val topicResp = "espgw/$gwId/resp"
+    private val topicAppLatest = "espgw/app/latest"
 
     private val _connected = MutableStateFlow(false)
     /** 手机到云端的连接 */
@@ -58,6 +59,10 @@ class CloudLink(
 
     private val _state = MutableStateFlow<CloudState?>(null)
     val state: StateFlow<CloudState?> = _state
+
+    private val _appLatest = MutableStateFlow<Int?>(null)
+    /** 最新 App 的 versionCode（发版时发布的保留消息） */
+    val appLatest: StateFlow<Int?> = _appLatest
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
@@ -76,7 +81,7 @@ class CloudLink(
                 _connected.value = true
                 _error.value = null
                 runCatching {
-                    client.subscribe(arrayOf(topicState, topicOnline, topicResp), intArrayOf(1, 1, 1))
+                    client.subscribe(arrayOf(topicState, topicOnline, topicResp, topicAppLatest), intArrayOf(1, 1, 1, 1))
                 }
             }
 
@@ -88,6 +93,7 @@ class CloudLink(
                 val text = message.payload.toString(Charsets.UTF_8)
                 when (topic) {
                     topicOnline -> _gwOnline.value = text == "1"
+                    topicAppLatest -> runCatching { _appLatest.value = JSONObject(text).getInt("versionCode") }
                     topicState -> runCatching {
                         val o = JSONObject(text)
                         _state.value = CloudState(

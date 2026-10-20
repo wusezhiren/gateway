@@ -278,6 +278,16 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [ ] 4G 下远程控制、网关断电后 App 显示离线（遗嘱约 90 秒）
 - [ ] 远程固件升级（服务器存固件或 MQTT 分片）
 
+## App 发布与自更新
+
+- [x] App 发布签名（`local/release.keystore`，调试包也用它签，可互相覆盖安装）
+- [x] 网关固件内置进 App（Gradle 从 `gateway/build` 拷入 assets），固件页比较版本，一键升级网关（局域网）
+- [x] App 自更新：读公开仓库 `version.json`，下载后校验 SHA-256，调起系统安装；云端 `espgw/app/latest` 通知
+- [x] 发版脚本 `tools/release_app.py`（release 包 3.8MB，含 2MB 网关固件）
+- [ ] 首次正式发布并实测 gitee 附件匿名下载
+- [ ] 外网通过 MQTT 分片升级网关
+- [ ] ESP-NOW 密钥改为每个节点配对时随机生成（固件公开后编译期默认密钥可被提取）
+
 ## 阶段 7：业务扩展
 
 - [ ] 更多执行器类型（电机、舵机等）与输入类型（按键、传感器上报）

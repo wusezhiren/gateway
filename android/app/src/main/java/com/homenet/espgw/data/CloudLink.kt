@@ -126,6 +126,8 @@ class CloudLink(
             isCleanSession = true
             keepAliveInterval = 30
             connectionTimeout = 10
+            // 默认最长 128 秒，切换网络后会等很久
+            maxReconnectDelay = 10_000
         }
         client.connect(opts, null, object : IMqttActionListener {
             override fun onSuccess(asyncActionToken: IMqttToken?) = cont.resume(Unit)

@@ -94,7 +94,7 @@ fun HomeScreen(vm: HomeViewModel, onAddGateway: () -> Unit) {
             vm.linkError?.let {
                 Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        "$it（${vm.gateway?.ip}），正在重试…",
+                        if (vm.cloudConfig == null) "$it（${vm.gateway?.ip}），正在重试…" else it,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )

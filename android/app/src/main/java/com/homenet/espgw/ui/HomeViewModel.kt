@@ -1,6 +1,8 @@
 package com.homenet.espgw.ui
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
@@ -80,6 +82,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private var lanFailures = 0
     private var lastLanTry = 0L
 
+    private val cm = app.getSystemService(ConnectivityManager::class.java)
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var defaultNet: Network? = null
+
     private fun api(): GwApi? = gateway?.let { GwApi(it.ip, it.token) }
 
     /** 云端可用：手机连上云端且网关在线 */
@@ -100,6 +106,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startPolling() {
         if (pollJob?.isActive == true) return
+        watchNetwork()
         startCloud()
         pollJob = viewModelScope.launch {
             while (isActive) {
@@ -112,7 +119,35 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+        netCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+        netCallback = null
+        defaultNet = null
         stopCloud()
+    }
+
+    /**
+     * 手机默认网络变化（Wi-Fi ⇄ 4G）时，旧的云端连接绑在已断开的网络上，
+     * 等它自己超时重连要很久：直接重建，并立刻重新判断走局域网还是云端。
+     */
+    private fun watchNetwork() {
+        if (netCallback != null) return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val changed = defaultNet != null && defaultNet != network
+                defaultNet = network
+                if (changed) viewModelScope.launch { onNetworkChanged() }
+            }
+        }
+        netCallback = cb
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+    }
+
+    private fun onNetworkChanged() {
+        transport = Transport.None
+        lanOk = false
+        lanFailures = 0
+        lastLanTry = 0
+        restartCloud()
     }
 
     // ---------- 云端 ----------
@@ -222,9 +257,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             }
             transport = Transport.None
             if (!quiet) {
+                val c = cloud
                 linkError = when {
-                    cloud?.connected?.value == true && cloud?.gwOnline?.value == false -> "网关不在线"
-                    else -> e.userMessage()
+                    c == null -> e.userMessage()
+                    c.connected.value && c.gwOnline.value == false -> "网关不在线"
+                    !c.connected.value -> "正在通过云端连接…" + (c.error.value?.let { "（$it）" } ?: "")
+                    else -> "正在等待网关状态…"
                 }
             }
             // 连续失败时用 mDNS 按 MAC 找一下，网关 IP 可能变了

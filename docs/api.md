@@ -94,10 +94,10 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 
 ```json
 {"configured": true, "connected": false, "id": "44bd8df31b70",
- "host": "xxxx.emqxsl.cn", "port": 8883, "username": "espgw", "error": "auth_failed"}
+ "host": "xxxx.emqxsl.cn", "port": 8883, "username": "espgw", "password": "***", "error": "auth_failed"}
 ```
 
-`error`：最近一次连接失败原因（`auth_failed` / `tls_failed` / `connect_failed`），连上后清空。不返回密码。
+`password` 只返回给带 token 的请求，App 用它自动同步云端设置。`error`：最近一次连接失败原因（`auth_failed` / `tls_failed` / `connect_failed`），连上后清空。
 
 ### `POST /api/cloud`
 

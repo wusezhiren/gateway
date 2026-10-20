@@ -12,6 +12,18 @@ menu "Gateway"
         string "Provisioning SoftAP password (8-63 chars, empty = random each time)"
         default "a12345678"
 
+    config GW_LCD_BL_EXP_PIN
+        int "TCA9554 pin controlling LCD backlight (-1 = unknown, only panel sleep)"
+        range -1 7
+        default -1
+        help
+            Screen-off turns this expander pin low. Use the console 'exp <pin> <0|1>'
+            command to find which pin is the backlight on your board.
+
+    config GW_SCREEN_OFF_S
+        int "Default screen-off timeout in seconds (0 = always on)"
+        default 60
+
     config GW_MAX_NODES
         int "Maximum number of paired nodes"
         range 1 14

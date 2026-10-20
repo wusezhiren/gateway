@@ -1,16 +1,21 @@
+#include <stdlib.h>
+#include <time.h>
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "gw_display.h"
 #include "gw_http.h"
 #include "gw_keys.h"
 #include "gw_link.h"
 #include "gw_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
+#include "ui.h"
 
 void gw_console_start(void);
 
@@ -28,10 +33,17 @@ static void on_event(gw_event_t ev, int idx)
     ESP_LOGI(TAG, "event %s node %d", names[ev], idx);
 }
 
+static bool s_ui_ok;
+
 static void on_key(gw_key_t key, gw_key_event_t ev)
 {
+    if (s_ui_ok) {
+        ui_on_key(key, ev);
+    }
     if (key == GW_KEY_REC && ev == GW_KEY_EV_LONG) {
-        gw_prov_on_long_press();
+        if (gw_prov_on_long_press() == GW_PROV_KEY_NEED_CONFIRM && s_ui_ok) {
+            ui_request_prov_confirm();
+        }
     }
 }
 
@@ -97,11 +109,24 @@ void app_main(void)
              esp_ota_get_running_partition()->label);
 
     ESP_ERROR_CHECK(gw_wifi_init());
+
+    /* 联网后自动对时，状态栏显示时间用 */
+    setenv("TZ", "CST-8", 1);
+    tzset();
+    esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
+    esp_netif_sntp_init(&sntp);
     gw_link_set_event_cb(on_event);
     ESP_ERROR_CHECK(gw_link_start());
     ESP_ERROR_CHECK(gw_http_start());
     gw_ota_set_cb(on_ota);
     ESP_ERROR_CHECK(gw_prov_init(on_prov));
+    /* 屏幕失败不影响组网功能 */
+    if (gw_display_init() == ESP_OK) {
+        ui_start();
+        s_ui_ok = true;
+    } else {
+        ESP_LOGE(TAG, "display init failed, running headless");
+    }
     ESP_ERROR_CHECK(gw_keys_start(on_key));
 
     gw_wifi_status_t ws;

@@ -11,6 +11,7 @@
  *   keys [on|off]              打印按键 ADC 读数
  *   token                      打印 App/OTA 接口用的 API token
  *   ota                        查看 OTA 状态和分区
+ *   exp <pin> <0|1>            设置屏幕 IO 扩展芯片引脚（找背光脚用）
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "gw_display.h"
 #include "gw_keys.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
@@ -192,6 +194,17 @@ static int cmd_ota(int argc, char **argv)
     return 0;
 }
 
+static int cmd_exp(int argc, char **argv)
+{
+    if (argc != 3) {
+        printf("usage: exp <pin 0-7> <0|1>\n");
+        return 1;
+    }
+    esp_err_t err = gw_display_exp_set(atoi(argv[1]), atoi(argv[2]));
+    printf("%s\n", esp_err_to_name(err));
+    return err == ESP_OK ? 0 : 1;
+}
+
 void gw_console_start(void)
 {
     esp_console_repl_t *repl = NULL;
@@ -215,6 +228,7 @@ void gw_console_start(void)
         {.command = "keys",   .help = "keys [on|off], log key ADC readings", .func = cmd_keys},
         {.command = "token",  .help = "Print API token for app / OTA", .func = cmd_token},
         {.command = "ota",    .help = "Show OTA status and partitions", .func = cmd_ota},
+        {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

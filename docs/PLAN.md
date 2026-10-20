@@ -284,7 +284,7 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [x] 网关固件内置进 App（Gradle 从 `gateway/build` 拷入 assets），固件页比较版本，一键升级网关（局域网）
 - [x] App 自更新：读公开仓库 `version.json`，下载后校验 SHA-256，调起系统安装；云端 `espgw/app/latest` 通知
 - [x] 发版脚本 `tools/release_app.py`（release 包 3.8MB，含 2MB 网关固件）
-- [ ] 首次正式发布并实测 gitee 附件匿名下载
+- [x] 首次正式发布 v0.2.0（内置网关 v0.4.1）：匿名读 version.json、下载 APK（跳转 2 次到 foruda.gitee.com）均正常，SHA-256 一致
 - [ ] 外网通过 MQTT 分片升级网关
 - [ ] ESP-NOW 密钥改为每个节点配对时随机生成（固件公开后编译期默认密钥可被提取）
 

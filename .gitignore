@@ -9,3 +9,6 @@ managed_components/
 # 签名私钥不入库
 *.pem
 .cache/
+
+# 本地凭据，不上传
+local/

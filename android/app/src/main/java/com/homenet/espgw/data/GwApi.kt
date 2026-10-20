@@ -73,13 +73,11 @@ class GwApi(
 
     suspend fun info(): GwInfo = GwInfo.parse(JSONObject(request("GET", "/api/info")))
 
-    suspend fun nodes(): NodeList {
-        val o = JSONObject(request("GET", "/api/nodes"))
-        val arr = o.optJSONArray("nodes") ?: JSONArray()
-        return NodeList(
-            pairLeft = o.optInt("pair_left"),
-            nodes = (0 until arr.length()).map { Node.parse(arr.getJSONObject(it)) },
-        )
+    suspend fun nodes(): NodeList = NodeList.parse(JSONObject(request("GET", "/api/nodes")))
+
+    /** 把云端 broker 配置下发给网关（host 为空表示关闭） */
+    suspend fun setCloud(cfg: CloudConfig) {
+        request("POST", "/api/cloud", cfg.toJson())
     }
 
     suspend fun set(mac: String, ch: Int, value: Int) {
@@ -179,6 +177,14 @@ fun Throwable.userMessage(): String = when (this) {
         "too_large" -> "固件太大"
         "not_provisioning" -> "网关不在配网模式"
         "invalid_ssid_or_password" -> "Wi-Fi 名称或密码格式不对（密码 8~63 位）"
+        else -> "网关错误：$error"
+    }
+    is CloudException -> when (error) {
+        "unauthorized" -> "网关拒绝访问（token 无效，请重新绑定）"
+        "offline" -> "节点离线"
+        "no_such_node" -> "节点不存在"
+        "timeout" -> "网关没有响应（云端）"
+        "gateway_offline" -> "网关不在线"
         else -> "网关错误：$error"
     }
     is java.net.SocketTimeoutException -> "连接网关超时"

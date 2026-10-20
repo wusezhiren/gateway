@@ -265,12 +265,15 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [ ] 手机实测（配网、绑定、控制、OTA）
 - [ ] 节点固件升级（随阶段 3b）
 
-## 外网访问
+## 外网访问（云端 MQTT）
 
-- 方案：家里常开的树莓派做 [Tailscale](https://tailscale.com) 子网路由，发布家庭网段；手机装 Tailscale 后，
-  App 直接按保存的局域网 IP 访问网关，**网关和 App 都不用改**
-- 路由器给网关做 DHCP 固定 IP（外网时 mDNS 不可用，App 依赖保存的 IP）
-- 以后需要推送 / 多用户时再考虑树莓派上跑 MQTT broker
+方案改为网关和 App 都直连云端 MQTT（EMQX Cloud Serverless），手机只装本 App，协议见 `docs/cloud.md`。
+（之前试过树莓派 + Tailscale 子网路由，能用但链路多，放弃。）
+
+- [x] 网关 `gw_cloud`：TLS 连 broker，保留状态 / 在线标记，命令带 token 校验；`/api/cloud`、串口 `cloud`；屏幕概览显示云端状态（v0.4.0）
+- [x] App：Paho MQTT 客户端，局域网可达时直连，否则走云端；云端设置页（保存并下发到网关）
+- [ ] 建 EMQX Cloud 部署并端到端实测（外网 4G 控制）
+- [ ] 远程固件升级（服务器存固件或 MQTT 分片）
 
 ## 阶段 7：业务扩展
 
@@ -278,7 +281,7 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 
 ## 暂不做
 
-- 云 broker / 服务器拉取固件（外网先走 Tailscale）
+- 远程固件升级（目前只在局域网升级）
 - 硬件 Secure Boot / Flash 加密（涉及不可逆 eFuse）
 - 节点电池供电与深睡
 - 多跳组网

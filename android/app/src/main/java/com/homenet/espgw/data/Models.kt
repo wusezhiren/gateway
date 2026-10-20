@@ -10,6 +10,9 @@ data class Gateway(
     val token: String,
     val name: String,
 ) {
+    /** 云端 topic 里的网关 ID：MAC 小写去冒号 */
+    val cloudId: String get() = mac.replace(":", "").lowercase()
+
     fun toJson(): JSONObject = JSONObject()
         .put("mac", mac).put("ip", ip).put("token", token).put("name", name)
 
@@ -48,12 +51,15 @@ data class GwInfo(
     val nodesOnline: Int,
     val pairLeft: Int,
     val ota: OtaStatus,
+    val cloudConfigured: Boolean,
+    val cloudConnected: Boolean,
 ) {
     companion object {
         fun parse(o: JSONObject): GwInfo {
             val w = o.optJSONObject("wifi") ?: JSONObject()
             val n = o.optJSONObject("nodes") ?: JSONObject()
             val ota = o.optJSONObject("ota") ?: JSONObject()
+            val cloud = o.optJSONObject("cloud") ?: JSONObject()
             return GwInfo(
                 project = o.optString("project"),
                 version = o.optString("version"),
@@ -76,6 +82,8 @@ data class GwInfo(
                     version = ota.optString("version"),
                     error = ota.optString("error"),
                 ),
+                cloudConfigured = cloud.optBoolean("configured"),
+                cloudConnected = cloud.optBoolean("connected"),
             )
         }
     }
@@ -130,7 +138,37 @@ data class Node(
     }
 }
 
-data class NodeList(val pairLeft: Int, val nodes: List<Node>)
+data class NodeList(val pairLeft: Int, val nodes: List<Node>) {
+    companion object {
+        fun parse(o: JSONObject): NodeList {
+            val arr = o.optJSONArray("nodes") ?: JSONArray()
+            return NodeList(
+                pairLeft = o.optInt("pair_left"),
+                nodes = (0 until arr.length()).map { Node.parse(arr.getJSONObject(it)) },
+            )
+        }
+    }
+}
+
+/** 云端 broker（EMQX Cloud 等，MQTT over TLS）；网关和手机共用一组账号 */
+data class CloudConfig(
+    val host: String,
+    val port: Int,
+    val username: String,
+    val password: String,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("host", host).put("port", port).put("username", username).put("password", password)
+
+    companion object {
+        fun fromJson(o: JSONObject) = CloudConfig(
+            host = o.getString("host"),
+            port = o.optInt("port", 8883),
+            username = o.optString("username"),
+            password = o.optString("password"),
+        )
+    }
+}
 
 /** 配网热点内 GET /api/prov/scan 的一项 */
 data class ScanAp(val ssid: String, val rssi: Int, val secure: Boolean)

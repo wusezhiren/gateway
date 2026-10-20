@@ -98,4 +98,4 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 - 新网关：App 内连接热点配网，成功后自动保存地址和 token
 - 已联网网关：App 通过 mDNS 查找（或手动输入 IP），在网关屏幕上点“允许”完成绑定
-- 外网访问：家里树莓派做 Tailscale 子网路由，手机装 Tailscale 即可，见 [docs/PLAN.md](docs/PLAN.md)
+- 外网访问：网关和 App 都连云端 MQTT（EMQX Cloud），在 App「网关 → 云端设置」填写，见 [docs/cloud.md](docs/cloud.md)

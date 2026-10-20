@@ -67,7 +67,8 @@ fun HomeScreen(vm: HomeViewModel, onAddGateway: () -> Unit) {
                         when {
                             vm.linkError != null -> "未连接"
                             info == null -> "连接中…"
-                            else -> "在线 · 节点 ${info.nodesOnline}/${info.nodesTotal}"
+                            else -> (if (vm.transport == Transport.Cloud) "云端" else "局域网") +
+                                " · 节点 ${info.nodesOnline}/${info.nodesTotal}"
                         },
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

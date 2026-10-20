@@ -10,6 +10,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.homenet.espgw.data.ApiException
+import com.homenet.espgw.data.CloudConfig
+import com.homenet.espgw.data.CloudLink
 import com.homenet.espgw.data.Discovery
 import com.homenet.espgw.data.Gateway
 import com.homenet.espgw.data.GatewayStore
@@ -22,6 +24,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 sealed interface OtaUi {
     data object Idle : OtaUi
@@ -33,17 +36,36 @@ sealed interface OtaUi {
     data class NeedForce(val uri: Uri) : OtaUi
 }
 
-/** 已绑定网关的主界面：定时刷新、节点控制、配对、网关升级 */
+/** 当前通过哪条链路和网关通信 */
+enum class Transport { None, Lan, Cloud }
+
+/**
+ * 已绑定网关的主界面。
+ * 配了云端时优先走云端（网关状态由 MQTT 推送），否则或云端不通时走局域网 HTTP 轮询。
+ * 网关固件升级只走局域网。
+ */
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val store = GatewayStore(app)
 
     var gateway by mutableStateOf(store.load())
+        private set
+    var cloudConfig by mutableStateOf(store.loadCloud())
         private set
     var info by mutableStateOf<GwInfo?>(null)
         private set
     var nodes by mutableStateOf<List<Node>>(emptyList())
         private set
     var pairLeft by mutableIntStateOf(0)
+        private set
+    var transport by mutableStateOf(Transport.None)
+        private set
+    /** 局域网能直连网关（固件升级、下发云端配置需要） */
+    var lanOk by mutableStateOf(false)
+        private set
+    /** 手机到云端的连接状态与错误 */
+    var cloudConnected by mutableStateOf(false)
+        private set
+    var cloudError by mutableStateOf<String?>(null)
         private set
     /** 连不上网关时的提示，连上后清空 */
     var linkError by mutableStateOf<String?>(null)
@@ -53,25 +75,36 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     var ota by mutableStateOf<OtaUi>(OtaUi.Idle)
 
     private var pollJob: Job? = null
-    private var failures = 0
+    private var cloud: CloudLink? = null
+    private var cloudJobs = mutableListOf<Job>()
+    private var lanFailures = 0
+    private var lastLanTry = 0L
 
     private fun api(): GwApi? = gateway?.let { GwApi(it.ip, it.token) }
 
+    /** 云端可用：手机连上云端且网关在线 */
+    private fun cloudUsable(): Boolean = cloud?.let { it.connected.value && it.gwOnline.value == true } == true
+
     fun saveGateway(gw: Gateway?) {
         if (gw == null) store.clear() else store.save(gw)
+        val changed = gw?.mac != gateway?.mac || gw?.token != gateway?.token
         gateway = gw
-        info = null
-        nodes = emptyList()
-        linkError = null
-        failures = 0
+        if (changed) {
+            info = null
+            nodes = emptyList()
+            linkError = null
+            lanFailures = 0
+            restartCloud()
+        }
     }
 
     fun startPolling() {
         if (pollJob?.isActive == true) return
+        startCloud()
         pollJob = viewModelScope.launch {
             while (isActive) {
-                refresh()
-                delay(if (ota is OtaUi.Rebooting) 1000 else 2000)
+                tick()
+                delay(1000)
             }
         }
     }
@@ -79,9 +112,91 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+        stopCloud()
     }
 
-    suspend fun refresh() {
+    // ---------- 云端 ----------
+
+    private fun startCloud() {
+        val gw = gateway ?: return
+        val cfg = cloudConfig ?: return
+        if (cloud != null) return
+        val link = CloudLink(cfg, gw.cloudId, gw.token, viewModelScope)
+        cloud = link
+        link.start()
+        cloudJobs += viewModelScope.launch { link.connected.collect { cloudConnected = it } }
+        cloudJobs += viewModelScope.launch { link.error.collect { cloudError = it } }
+        cloudJobs += viewModelScope.launch {
+            link.state.collect { st ->
+                st ?: return@collect
+                // 局域网直连时以 HTTP 轮询为准，避免两边数据来回跳
+                if (transport != Transport.Lan) {
+                    info = st.info
+                    nodes = st.nodes.nodes
+                    val elapsed = ((System.currentTimeMillis() - st.receivedAt) / 1000).toInt()
+                    pairLeft = (st.nodes.pairLeft - elapsed).coerceAtLeast(0)
+                }
+            }
+        }
+    }
+
+    private fun stopCloud() {
+        cloudJobs.forEach { it.cancel() }
+        cloudJobs.clear()
+        cloud?.close()
+        cloud = null
+        cloudConnected = false
+    }
+
+    private fun restartCloud() {
+        val running = pollJob?.isActive == true
+        stopCloud()
+        if (running) startCloud()
+    }
+
+    fun saveCloud(cfg: CloudConfig?) {
+        store.saveCloud(cfg)
+        cloudConfig = cfg
+        restartCloud()
+        // 同时下发给网关（需要局域网可达）
+        val api = api() ?: return
+        viewModelScope.launch {
+            message = try {
+                api.setCloud(cfg ?: CloudConfig("", 8883, "", ""))
+                if (cfg == null) "已关闭云端连接" else "已下发到网关，稍等网关连上云端"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "已保存到手机，但没能下发到网关（需在局域网内）：${e.userMessage()}"
+            }
+        }
+    }
+
+    // ---------- 轮询 ----------
+
+    /**
+     * 每秒一次：局域网能通就 2 秒轮询一次 HTTP（最快、数据最准）；
+     * 不通但云端可用就用云端推送，并每 15 秒探一下局域网；都不通就继续重试局域网。
+     */
+    private suspend fun tick() {
+        val now = System.currentTimeMillis()
+        if (transport != Transport.Lan && cloudUsable()) {
+            transport = Transport.Cloud
+            linkError = null
+            if (pairLeft > 0) pairLeft--
+            if (now - lastLanTry >= 15_000) {
+                lastLanTry = now
+                refreshLan(quiet = true)
+            }
+        } else if (now - lastLanTry >= 2000) {
+            lastLanTry = now
+            refreshLan(quiet = false)
+        }
+    }
+
+    suspend fun refresh() = refreshLan(quiet = false)
+
+    private suspend fun refreshLan(quiet: Boolean) {
         val api = api() ?: return
         try {
             val i = api.info()
@@ -90,17 +205,30 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             nodes = nl.nodes
             pairLeft = nl.pairLeft
             linkError = null
-            failures = 0
+            lanFailures = 0
+            lanOk = true
+            transport = Transport.Lan
             (ota as? OtaUi.Rebooting)?.let {
                 if (i.version == it.version) ota = OtaUi.Done(it.version)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            failures++
-            linkError = e.userMessage()
+            lanOk = false
+            lanFailures++
+            if (cloudUsable()) {
+                transport = Transport.Cloud
+                return
+            }
+            transport = Transport.None
+            if (!quiet) {
+                linkError = when {
+                    cloud?.connected?.value == true && cloud?.gwOnline?.value == false -> "网关不在线"
+                    else -> e.userMessage()
+                }
+            }
             // 连续失败时用 mDNS 按 MAC 找一下，网关 IP 可能变了
-            if (failures == 3 && e !is ApiException) rediscover()
+            if (lanFailures == 3 && e !is ApiException) rediscover()
         }
     }
 
@@ -113,12 +241,19 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun action(block: suspend (GwApi) -> Unit) {
-        val api = api() ?: return
+    // ---------- 命令 ----------
+
+    private fun action(op: String, args: JSONObject, http: suspend (GwApi) -> Unit, done: String? = null) {
         viewModelScope.launch {
             try {
-                block(api)
-                refresh()
+                val c = cloud
+                if (transport == Transport.Lan || c == null || !cloudUsable()) {
+                    http(api() ?: return@launch)
+                    refreshLan(quiet = true)
+                } else {
+                    c.command(op, args)     // 网关执行后会推送新状态
+                }
+                done?.let { message = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -127,14 +262,19 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setChannel(node: Node, ch: Int, value: Int) = action { it.set(node.mac, ch, value) }
+    fun setChannel(node: Node, ch: Int, value: Int) =
+        action("set", JSONObject().put("mac", node.mac).put("ch", ch).put("value", value),
+            { it.set(node.mac, ch, value) })
 
-    fun unpair(node: Node) = action {
-        it.unpair(node.mac)
-        message = "已解绑 ${node.title}"
+    fun unpair(node: Node) =
+        action("unpair", JSONObject().put("mac", node.mac), { it.unpair(node.mac) }, "已解绑 ${node.title}")
+
+    fun pair(seconds: Int) {
+        pairLeft = seconds
+        action("pair", JSONObject().put("seconds", seconds), { it.pair(seconds) })
     }
 
-    fun pair(seconds: Int) = action { it.pair(seconds) }
+    // ---------- 网关升级（仅局域网） ----------
 
     fun uploadFirmware(uri: Uri, force: Boolean = false) {
         val api = api() ?: return

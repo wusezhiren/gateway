@@ -18,4 +18,12 @@ class GatewayStore(context: Context) {
     fun clear() {
         prefs.edit().remove("gw").apply()
     }
+
+    fun loadCloud(): CloudConfig? = prefs.getString("cloud", null)?.let {
+        runCatching { CloudConfig.fromJson(JSONObject(it)) }.getOrNull()
+    }
+
+    fun saveCloud(cfg: CloudConfig?) {
+        prefs.edit().apply { if (cfg == null) remove("cloud") else putString("cloud", cfg.toJson().toString()) }.apply()
+    }
 }

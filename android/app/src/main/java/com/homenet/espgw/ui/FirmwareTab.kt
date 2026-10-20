@@ -41,6 +41,10 @@ fun FirmwareTab(vm: HomeViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
             )
+            if (!vm.lanOk && !busy) {
+                Text("固件升级需要手机和网关在同一局域网", color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+            }
             when (ota) {
                 is OtaUi.Uploading -> {
                     val f = if (ota.total > 0) ota.sent.toFloat() / ota.total else 0f
@@ -67,7 +71,7 @@ fun FirmwareTab(vm: HomeViewModel) {
                     vm.ota = OtaUi.Idle
                     pick.launch(arrayOf("application/octet-stream", "*/*"))
                 },
-                enabled = !busy && info != null,
+                enabled = !busy && vm.lanOk,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             ) { Text("选择固件并升级") }
         }

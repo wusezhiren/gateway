@@ -5,9 +5,13 @@
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 #include "esp_ota_ops.h"
+#include "esp_mac.h"
+#include "esp_wifi.h"
+#include "mdns.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "gw_api.h"
 #include "gw_display.h"
 #include "gw_http.h"
 #include "gw_keys.h"
@@ -94,6 +98,28 @@ static bool pending_verify(void)
            state == ESP_OTA_IMG_PENDING_VERIFY;
 }
 
+/* App 通过 mDNS 发现网关：esp-gw.local，服务 _espgw._tcp */
+static void mdns_start(void)
+{
+    if (mdns_init() != ESP_OK) {
+        ESP_LOGE(TAG, "mdns init failed");
+        return;
+    }
+    uint8_t mac[6];
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    char inst[24], mac_str[18];
+    snprintf(inst, sizeof(inst), "ESP-GW-%02X%02X", mac[4], mac[5]);
+    snprintf(mac_str, sizeof(mac_str), MACSTR, MAC2STR(mac));
+    mdns_hostname_set("esp-gw");
+    mdns_instance_name_set(inst);
+    mdns_txt_item_t txt[] = {
+        {"mac", mac_str},
+        {"version", esp_app_get_description()->version},
+    };
+    mdns_service_add(inst, "_espgw", "_tcp", 80, txt, sizeof(txt) / sizeof(txt[0]));
+    mdns_service_add(inst, "_http", "_tcp", 80, NULL, 0);
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -109,6 +135,7 @@ void app_main(void)
              esp_ota_get_running_partition()->label);
 
     ESP_ERROR_CHECK(gw_wifi_init());
+    mdns_start();
 
     /* 联网后自动对时，状态栏显示时间用 */
     setenv("TZ", "CST-8", 1);
@@ -124,6 +151,7 @@ void app_main(void)
     if (gw_display_init() == ESP_OK) {
         ui_start();
         s_ui_ok = true;
+        gw_api_set_bind_cb(ui_request_bind_confirm);
     } else {
         ESP_LOGE(TAG, "display init failed, running headless");
     }

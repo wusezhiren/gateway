@@ -17,11 +17,73 @@ token 为 32 位十六进制，配网成功时由 `/api/prov/status` 返回，�
 {"project": "esp_s3_gateway", "version": "0.2.0", "partition": "ota_1", "idf": "...",
  "mac": "44:bd:8d:f3:1b:70", "uptime_s": 39,
  "wifi": {"ssid": "...", "connected": true, "ip": "192.168.32.222", "rssi": -26, "channel": 11},
- "nodes": {"total": 0, "online": 0},
+ "nodes": {"total": 0, "online": 0, "pair_left": 0},
  "ota": {"state": "idle", "received": 0, "total": 0}}
 ```
 
 `ota.state`：`idle` / `receiving` / `rebooting` / `failed`（附 `error`），`version` 为目标版本。
+
+## 发现
+
+网关注册 mDNS：主机名 `esp-gw.local`，服务 `_espgw._tcp`（端口 80，实例名 `ESP-GW-XXXX`，
+TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同一台网关。
+
+## 绑定（获取 token）
+
+已联网的网关通过屏幕确认把 token 交给 App，均无需鉴权：
+
+### `POST /api/bind`
+
+```json
+{"name": "Xiaomi 23013RK75C"}
+```
+
+返回 `{"id": "1a2b3c4d", "timeout_s": 60}`，网关屏幕弹出“绑定手机”确认框。已有请求在等确认时返回 `409 busy`。
+`name` 最多 24 字节，建议只用 ASCII（屏幕字库只有常用汉字）。
+
+### `GET /api/bind?id=<id>`
+
+| state | 说明 |
+|---|---|
+| `pending` | 等待屏幕确认 |
+| `allowed` | 已允许，同时返回 `token`（只返回一次） |
+| `denied` | 屏幕上点了取消，或 60 秒超时 |
+| `unknown` | id 不对或结果已过期（30 秒） |
+
+## 节点（需鉴权）
+
+### `GET /api/nodes`
+
+```json
+{"pair_left": 0,
+ "nodes": [{"mac": "aa:bb:cc:dd:ee:ff", "name": "relay-1", "online": true, "rssi": -48,
+            "uptime_s": 3600, "last_seen_s": 2, "version": "0.1.0", "project": "esp_s3_node",
+            "chip": "esp32c3",
+            "ch": [{"type": "relay", "max": 1, "value": 1},
+                   {"type": "pwm", "max": 1023, "value": 512, "desired": 600}]}]}
+```
+
+- `chip`：`esp32c3` / `esp32s3` / `esp32c6` / `unknown`
+- `ch[].type`：`relay`（0/1）/ `pwm`（0..max）；`desired` 存在且与 `value` 不同表示正在同步
+- `last_seen_s`：距最后一次收到该节点消息的秒数，从未收到为 -1
+
+### `POST /api/nodes/set`
+
+`{"mac": "aa:bb:cc:dd:ee:ff", "ch": 0, "value": 1}` → `{"ok": true}`（已发出，节点确认后 `value` 更新）
+
+| 状态码 | error |
+|---|---|
+| 400 | `bad_mac` / `bad_channel_or_value` / `bad_body` |
+| 404 | `no_such_node` |
+| 409 | `offline` |
+
+### `POST /api/nodes/unpair`
+
+`{"mac": "..."}` → `{"ok": true}`；错误同上。
+
+### `POST /api/pair`
+
+`{"seconds": 60}` 打开配对窗口（0~300，0 立即关闭）。剩余秒数见 `/api/nodes` 的 `pair_left` 或 `/api/info` 的 `nodes.pair_left`。
 
 ## 网关 OTA（阶段 3a）
 
@@ -117,4 +179,4 @@ tools/ota_upload.py <网关IP> gateway/build/esp_s3_gateway.bin --token <token> 
 - 网关连上路由器后，热点会跟随路由器信道，期间请求可能丢失。**所有请求都要设超时（建议 4 秒）**，
   轮询要串行（上一个结束再发下一个），失败后继续重试。
 - 成功后 30 秒热点关闭，手机会回到原网络；App 应在 `done` 时保存 `ip` 和 `token`。
-- token 只能在配网成功时从热点内拿到，网关后续的 API（阶段 5）都需要带上它。
+- token 在配网成功时从热点内拿到，或之后通过「绑定」在网关屏幕确认后获取。

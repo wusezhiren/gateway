@@ -12,6 +12,7 @@
 #include "gw_display.h"
 #include "ui.h"
 #include "ui_priv.h"
+#include "gw_api.h"
 
 static const char *TAG = "ui";
 
@@ -39,6 +40,7 @@ static uint32_t s_screen_off_s = CONFIG_GW_SCREEN_OFF_S;
 static volatile int s_key_page_delta;
 static volatile bool s_key_wake;
 static volatile bool s_req_prov_confirm;
+static volatile bool s_req_bind;
 
 static const char *const PAGE_TITLES[PAGE_COUNT] = {"概览", "节点", "固件", "设置"};
 
@@ -105,6 +107,7 @@ const char *ui_rssi_text(int8_t rssi)
 
 typedef struct {
     ui_confirm_cb_t cb;
+    ui_confirm_cb_t cancel;
     void *arg;
 } confirm_ctx_t;
 
@@ -129,14 +132,30 @@ static void dialog_ok_cb(lv_event_t *e)
 
 static void dialog_cancel_cb(lv_event_t *e)
 {
+    confirm_ctx_t ctx = s_confirm;
     dialog_close();
+    if (ctx.cancel) {
+        ctx.cancel(ctx.arg);
+    }
 }
 
 void ui_confirm(const char *title, const char *msg, const char *ok_text, lv_color_t ok_color,
                 ui_confirm_cb_t on_ok, void *arg)
 {
+    ui_confirm_ex(title, msg, ok_text, ok_color, on_ok, NULL, arg);
+}
+
+void ui_confirm_ex(const char *title, const char *msg, const char *ok_text, lv_color_t ok_color,
+                   ui_confirm_cb_t on_ok, ui_confirm_cb_t on_cancel, void *arg)
+{
+    /* 被新对话框顶掉的旧对话框按取消处理 */
+    confirm_ctx_t old = s_confirm;
+    bool had = s_dialog != NULL;
     dialog_close();
-    s_confirm = (confirm_ctx_t){.cb = on_ok, .arg = arg};
+    if (had && old.cancel) {
+        old.cancel(old.arg);
+    }
+    s_confirm = (confirm_ctx_t){.cb = on_ok, .cancel = on_cancel, .arg = arg};
 
     /* 半透明遮罩挡住下层点击 */
     s_dialog = lv_obj_create(lv_layer_top());
@@ -299,6 +318,17 @@ static void update_status_bar(void)
     lv_label_set_text_fmt(s_bar_right, "%d/%d  %s", g_ui.node_online, g_ui.node_total, clock);
 }
 
+static void bind_ok_cb(void *arg)
+{
+    gw_api_bind_decide(true);
+    ui_toast("已允许绑定");
+}
+
+static void bind_cancel_cb(void *arg)
+{
+    gw_api_bind_decide(false);
+}
+
 static void handle_requests(void)
 {
     int delta = s_key_page_delta;
@@ -336,6 +366,16 @@ static void handle_requests(void)
         s_req_prov_confirm = false;
         lv_display_trigger_activity(NULL);
         ui_settings_start_prov();
+    }
+    if (s_req_bind) {
+        s_req_bind = false;
+        char name[GW_API_NAME_LEN + 1];
+        if (gw_api_bind_pending(name)) {
+            lv_display_trigger_activity(NULL);
+            char msg[160];
+            snprintf(msg, sizeof(msg), "手机“%s”请求绑定此网关，允许后可在 App 中控制所有节点", name);
+            ui_confirm_ex("绑定手机", msg, "允许", UI_C_ACCENT, bind_ok_cb, bind_cancel_cb, NULL);
+        }
     }
 }
 
@@ -489,6 +529,12 @@ void ui_on_key(gw_key_t key, gw_key_event_t ev)
     } else if (key == GW_KEY_VOL_DOWN) {
         s_key_page_delta = 1;
     }
+}
+
+void ui_request_bind_confirm(void)
+{
+    s_key_wake = true;
+    s_req_bind = true;
 }
 
 void ui_request_prov_confirm(void)

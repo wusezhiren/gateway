@@ -6,6 +6,7 @@
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "gw_api.h"
 #include "gw_http.h"
 #include "gw_link.h"
 #include "gw_ota.h"
@@ -79,6 +80,7 @@ static esp_err_t info_get(httpd_req_t *req)
     cJSON *n = cJSON_AddObjectToObject(o, "nodes");
     cJSON_AddNumberToObject(n, "total", total);
     cJSON_AddNumberToObject(n, "online", online);
+    cJSON_AddNumberToObject(n, "pair_left", gw_link_pair_remaining());
     cJSON *ota = cJSON_AddObjectToObject(o, "ota");
     cJSON_AddStringToObject(ota, "state", gw_ota_state_name(os.state));
     cJSON_AddNumberToObject(ota, "received", os.received);
@@ -106,7 +108,7 @@ esp_err_t gw_http_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 24;
     cfg.lru_purge_enable = true;
     cfg.recv_wait_timeout = 10;
     cfg.send_wait_timeout = 10;
@@ -121,7 +123,11 @@ esp_err_t gw_http_start(void)
     esp_log_level_set("httpd_uri", ESP_LOG_ERROR);
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
-    return gw_ota_register(s_httpd);
+    err = gw_ota_register(s_httpd);
+    if (err == ESP_OK) {
+        err = gw_api_register(s_httpd);
+    }
+    return err;
 }
 
 httpd_handle_t gw_http_handle(void)

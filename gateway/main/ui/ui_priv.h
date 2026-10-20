@@ -50,6 +50,9 @@ void ui_set_hidden(lv_obj_t *obj, bool hidden);
 typedef void (*ui_confirm_cb_t)(void *arg);
 void ui_confirm(const char *title, const char *msg, const char *ok_text, lv_color_t ok_color,
                 ui_confirm_cb_t on_ok, void *arg);
+/* on_cancel 在点取消或被新对话框顶掉时调用 */
+void ui_confirm_ex(const char *title, const char *msg, const char *ok_text, lv_color_t ok_color,
+                   ui_confirm_cb_t on_ok, ui_confirm_cb_t on_cancel, void *arg);
 bool ui_dialog_open(void);
 void ui_toast(const char *msg);
 

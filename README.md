@@ -9,6 +9,7 @@ ESP-NOW 星型组网：酷世 KS_S3_KORVO_V4 作网关，ESP32-C3 / ESP32-S3 核
 components/meshproto/   网关与节点共用的协议定义
 gateway/                网关固件（ESP32-S3）
 node/                   节点固件（ESP32-C3 / ESP32-S3）
+android/                手机 App（Kotlin + Compose）
 keys/                   签名私钥（不入库）
 docs/                   文档
 ```
@@ -86,3 +87,15 @@ tools/ota_upload.py 192.168.x.x gateway/build/esp_s3_gateway.bin --token <token>
 - 未联网时长按 **REC** 3 秒进入；配网中再长按取消
 - 手机连热点 `ESP-GW-XXXX`（密码 `a12345678`），自动弹出配网页（或访问 `http://192.168.4.1`）
 - 接口见 [docs/api.md](docs/api.md)
+
+## 手机 App
+
+```bash
+cd android
+JAVA_HOME=~/.local/jdk ./gradlew :app:assembleDebug     # 需要 JDK 17、Android SDK 35
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+- 新网关：App 内连接热点配网，成功后自动保存地址和 token
+- 已联网网关：App 通过 mDNS 查找（或手动输入 IP），在网关屏幕上点“允许”完成绑定
+- 外网访问：家里树莓派做 Tailscale 子网路由，手机装 Tailscale 即可，见 [docs/PLAN.md](docs/PLAN.md)

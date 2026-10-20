@@ -244,20 +244,33 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 
 ## 阶段 5：网关 App API
 
-- [ ] mDNS：`esp-gw.local`
-- [ ] HTTP + WebSocket，全部接口 token 鉴权（token 在配网时生成）
-  - 节点列表、状态推送、SET、配对窗口、解绑
-  - OTA 上传、启动升级、进度推送
-- [ ] API 文档 `docs/api.md`；`tools/` 下提供 Python 测试客户端
+- [x] mDNS：`esp-gw.local`，服务 `_espgw._tcp`（TXT：mac、version）
+- [x] HTTP 接口，token 鉴权：节点列表、SET、配对窗口、解绑（`gw_api.c`）
+- [x] 绑定已联网网关：App 请求 → 网关屏幕点“允许” → 下发 token（需人在现场）
+- [x] 网关版本 0.3.0，经局域网 OTA 部署到 Korvo；curl 验证鉴权、配对、错误码
+- [ ] mDNS 实测（开发机是 NAT 虚拟机收不到组播，待手机验证）
+- [ ] WebSocket 状态推送（目前 App 2 秒轮询，局域网够用）
+- [ ] 节点 OTA 接口（随阶段 3b）
 
 ## 阶段 6：Android App
 
-- [ ] 安装 JDK，搭建 Kotlin + Jetpack Compose 工程（`app/`）
-- [ ] 配网：读取当前 Wi-Fi 名称预填、自动连接网关热点、下发凭据、保存 token
-- [ ] 发现网关（mDNS）
-- [ ] 节点列表与控制：按节点上报的通道类型自动生成开关 / 滑条
-- [ ] 配对与解绑
-- [ ] 固件页：显示网关和各节点版本，从手机选择签名后的 `.bin` 上传，升级单个或全部节点，显示进度与结果
+工程在 `android/`（Kotlin + Jetpack Compose，minSdk 29，JDK 17）。
+
+- [x] 配网：读取手机当前 Wi-Fi 预填，App 内连网关热点（`WifiNetworkSpecifier`），网关扫描列表选择，下发凭据，保存 IP / token
+- [x] 发现与绑定已联网网关（mDNS 或手动 IP，屏幕确认）
+- [x] 节点列表与控制：按通道类型生成开关 / 滑条（松手发送），详情与解绑
+- [x] 配对窗口（60 秒倒计时、停止）
+- [x] 固件页：选择签名 `.bin` 上传网关，显示进度，等待新版本上线；版本不高时可选择强制降级
+- [x] 连续失败时按 MAC 用 mDNS 重新查找网关 IP
+- [ ] 手机实测（配网、绑定、控制、OTA）
+- [ ] 节点固件升级（随阶段 3b）
+
+## 外网访问
+
+- 方案：家里常开的树莓派做 [Tailscale](https://tailscale.com) 子网路由，发布家庭网段；手机装 Tailscale 后，
+  App 直接按保存的局域网 IP 访问网关，**网关和 App 都不用改**
+- 路由器给网关做 DHCP 固定 IP（外网时 mDNS 不可用，App 依赖保存的 IP）
+- 以后需要推送 / 多用户时再考虑树莓派上跑 MQTT broker
 
 ## 阶段 7：业务扩展
 
@@ -265,7 +278,7 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 
 ## 暂不做
 
-- 外网远程控制与外网 OTA（云 broker、服务器拉取固件）
+- 云 broker / 服务器拉取固件（外网先走 Tailscale）
 - 硬件 Secure Boot / Flash 加密（涉及不可逆 eFuse）
 - 节点电池供电与深睡
 - 多跳组网

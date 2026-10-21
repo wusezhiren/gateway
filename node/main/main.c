@@ -49,6 +49,6 @@ void app_main(void)
     ESP_ERROR_CHECK(node_link_start(desc, n_ch));
 
     if (CONFIG_NODE_RESET_GPIO >= 0) {
-        xTaskCreate(reset_button_task, "reset_btn", 2048, NULL, 3, NULL);
+        xTaskCreate(reset_button_task, "reset_btn", 3072, NULL, 3, NULL);
     }
 }

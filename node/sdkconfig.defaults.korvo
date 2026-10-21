@@ -1,0 +1,8 @@
+# KS_S3_KORVO_V4 当节点：板上两颗用户 LED（GP_LED_1/2，TCA9554 P6/P7）作两路开关
+# 编译：idf.py -B build_korvo -D SDKCONFIG=build_korvo/sdkconfig \
+#         -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.korvo" set-target esp32s3 build
+# GPIO5 是板上 ADC 按键、0/1/2/46 接 LCD，不能用默认的 4,5,6
+CONFIG_NODE_RELAY_GPIOS=""
+CONFIG_NODE_PWM_GPIOS=""
+CONFIG_NODE_EXP_RELAY_PINS="6,7"
+CONFIG_NODE_RESET_GPIO=0

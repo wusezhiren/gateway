@@ -12,6 +12,28 @@ menu "Node"
         bool "Relays are active low"
         default n
 
+    config NODE_EXP_RELAY_PINS
+        string "Relay channels on a TCA9554 I2C IO expander, pins 0..7 comma separated (empty = none)"
+        default ""
+        help
+            For boards whose outputs sit behind an IO expander, e.g. the Korvo
+            user LEDs GP_LED_1/2 on TCA9554 P6/P7. Added after the GPIO relays.
+
+    config NODE_EXP_ACTIVE_LOW
+        bool "Expander outputs are active low"
+        depends on NODE_EXP_RELAY_PINS != ""
+        default n
+
+    config NODE_EXP_I2C_SDA
+        int "IO expander I2C SDA GPIO"
+        depends on NODE_EXP_RELAY_PINS != ""
+        default 17
+
+    config NODE_EXP_I2C_SCL
+        int "IO expander I2C SCL GPIO"
+        depends on NODE_EXP_RELAY_PINS != ""
+        default 18
+
     config NODE_PWM_GPIOS
         string "PWM GPIOs, comma separated (empty = none)"
         default "6"

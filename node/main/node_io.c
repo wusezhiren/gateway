@@ -1,7 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "driver/gpio.h"
+#include "driver/i2c_master.h"
 #include "driver/ledc.h"
+#include "esp_io_expander_tca9554.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs.h"
@@ -22,6 +24,11 @@ static const char *TAG = "node_io";
 #else
 #define RELAY_ACTIVE_LOW 0
 #endif
+#ifdef CONFIG_NODE_EXP_ACTIVE_LOW
+#define EXP_ACTIVE_LOW 1
+#else
+#define EXP_ACTIVE_LOW 0
+#endif
 #ifdef CONFIG_NODE_PWM_ACTIVE_LOW
 #define PWM_ACTIVE_LOW 1
 #else
@@ -30,6 +37,7 @@ static const char *TAG = "node_io";
 
 typedef struct {
     uint8_t  type;
+    bool     exp;       /* 继电器在 IO 扩展上，gpio 为扩展引脚号 */
     int      gpio;
     int      ledc_ch;
     uint16_t value;
@@ -38,6 +46,7 @@ typedef struct {
 static io_ch_t s_ch[MP_MAX_CH];
 static uint8_t s_n;
 static esp_timer_handle_t s_save_timer;
+static esp_io_expander_handle_t s_exp;
 
 static void save_cb(void *arg);
 static void restore(void);
@@ -80,6 +89,51 @@ static esp_err_t add_relay(int gpio)
     return ESP_OK;
 }
 
+static esp_err_t expander_init(void)
+{
+#ifdef CONFIG_NODE_EXP_I2C_SDA
+    i2c_master_bus_handle_t bus;
+    const i2c_master_bus_config_t cfg = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = CONFIG_NODE_EXP_I2C_SDA,
+        .scl_io_num = CONFIG_NODE_EXP_I2C_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    esp_err_t err = i2c_new_master_bus(&cfg, &bus);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* TCA9554 与 TCA9554A 地址段不同，两个都试 */
+    err = esp_io_expander_new_i2c_tca9554(bus, ESP_IO_EXPANDER_I2C_TCA9554_ADDRESS_000, &s_exp);
+    if (err != ESP_OK) {
+        err = esp_io_expander_new_i2c_tca9554(bus, ESP_IO_EXPANDER_I2C_TCA9554A_ADDRESS_000, &s_exp);
+    }
+    return err;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static esp_err_t add_exp_relay(int pin)
+{
+    if (pin < 0 || pin > 7) {
+        ESP_LOGE(TAG, "expander pin %d invalid", pin);
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* 输入模式下不能设电平，先切输出 */
+    esp_err_t err = esp_io_expander_set_dir(s_exp, 1U << pin, IO_EXPANDER_OUTPUT);
+    if (err == ESP_OK) {
+        err = esp_io_expander_set_level(s_exp, 1U << pin, EXP_ACTIVE_LOW ? 1 : 0);
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+    s_ch[s_n++] = (io_ch_t){.type = MP_CH_RELAY, .exp = true, .gpio = pin, .ledc_ch = -1};
+    return ESP_OK;
+}
+
 static esp_err_t add_pwm(int gpio, int ledc_ch)
 {
     if (!GPIO_IS_VALID_OUTPUT_GPIO(gpio) || ledc_ch >= LEDC_CHANNEL_MAX) {
@@ -115,6 +169,20 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
         }
     }
 
+    n = parse_gpios(CONFIG_NODE_EXP_RELAY_PINS, gpios, MP_MAX_CH - s_n);
+    if (n > 0) {
+        esp_err_t err = expander_init();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "io expander init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        if (add_exp_relay(gpios[i]) != ESP_OK) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
     n = parse_gpios(CONFIG_NODE_PWM_GPIOS, gpios, MP_MAX_CH - s_n);
     if (n > 0) {
         ledc_timer_config_t timer = {
@@ -140,7 +208,8 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
     for (int i = 0; i < s_n; i++) {
         desc[i].type = s_ch[i].type;
         desc[i].max = s_ch[i].type == MP_CH_PWM ? PWM_MAX : 1;
-        ESP_LOGI(TAG, "ch%d %s gpio %d", i, s_ch[i].type == MP_CH_PWM ? "pwm" : "relay", s_ch[i].gpio);
+        ESP_LOGI(TAG, "ch%d %s %s %d", i, s_ch[i].type == MP_CH_PWM ? "pwm" : "relay",
+                 s_ch[i].exp ? "exp pin" : "gpio", s_ch[i].gpio);
     }
     *n_ch = s_n;
 
@@ -158,7 +227,11 @@ static void apply(uint8_t ch, uint16_t value)
     io_ch_t *c = &s_ch[ch];
     if (c->type == MP_CH_RELAY) {
         value = value ? 1 : 0;
-        gpio_set_level(c->gpio, RELAY_ACTIVE_LOW ? !value : value);
+        if (c->exp) {
+            esp_io_expander_set_level(s_exp, 1U << c->gpio, EXP_ACTIVE_LOW ? !value : value);
+        } else {
+            gpio_set_level(c->gpio, RELAY_ACTIVE_LOW ? !value : value);
+        }
     } else {
         if (value > PWM_MAX) {
             value = PWM_MAX;

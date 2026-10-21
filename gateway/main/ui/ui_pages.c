@@ -69,29 +69,29 @@ void ui_overview_update(void)
 {
     const gw_wifi_status_t *w = &g_ui.wifi;
     if (w->connected) {
-        lv_label_set_text(s_ov_net_title, w->ssid);
-        lv_obj_set_style_text_color(s_ov_net_title, UI_C_OK, 0);
-        lv_label_set_text(s_ov_ip, w->ip);
-        lv_label_set_text_fmt(s_ov_rssi, "%s  %d dBm", ui_rssi_text(w->rssi), w->rssi);
+        ui_label_text(s_ov_net_title, w->ssid);
+        ui_text_color(s_ov_net_title, UI_C_OK);
+        ui_label_text(s_ov_ip, w->ip);
+        ui_label_fmt(s_ov_rssi, "%s  %d dBm", ui_rssi_text(w->rssi), w->rssi);
     } else {
-        lv_label_set_text(s_ov_net_title, w->prov ? "配网中" : w->configured ? "正在连接路由器…" : "未配置路由器");
-        lv_obj_set_style_text_color(s_ov_net_title, w->configured ? UI_C_WARN : UI_C_SUB, 0);
-        lv_label_set_text(s_ov_ip, w->configured ? w->ssid : "长按 REC 键配网");
-        lv_label_set_text(s_ov_rssi, "-");
+        ui_label_text(s_ov_net_title, w->prov ? "配网中" : w->configured ? "正在连接路由器…" : "未配置路由器");
+        ui_text_color(s_ov_net_title, w->configured ? UI_C_WARN : UI_C_SUB);
+        ui_label_text(s_ov_ip, w->configured ? w->ssid : "长按 REC 键配网");
+        ui_label_text(s_ov_rssi, "-");
     }
-    lv_label_set_text_fmt(s_ov_ch, "%d", w->channel);
+    ui_label_fmt(s_ov_ch, "%d", w->channel);
     const gw_cloud_status_t *c = &g_ui.cloud;
-    lv_label_set_text(s_ov_cloud, !c->configured ? "未配置" : c->connected ? "已连接"
+    ui_label_text(s_ov_cloud, !c->configured ? "未配置" : c->connected ? "已连接"
                                   : c->error[0] ? c->error : "连接中…");
-    lv_obj_set_style_text_color(s_ov_cloud, !c->configured ? UI_C_SUB : c->connected ? UI_C_OK : UI_C_WARN, 0);
+    ui_text_color(s_ov_cloud, !c->configured ? UI_C_SUB : c->connected ? UI_C_OK : UI_C_WARN);
 
-    lv_label_set_text_fmt(s_ov_nodes, "%d / %d", g_ui.node_online, g_ui.node_total);
-    lv_obj_set_style_text_color(s_ov_nodes,
-                                g_ui.node_total && g_ui.node_online < g_ui.node_total ? UI_C_WARN : UI_C_TEXT, 0);
-    lv_label_set_text_fmt(s_ov_fw, "v%s", g_ui.fw_version);
+    ui_label_fmt(s_ov_nodes, "%d / %d", g_ui.node_online, g_ui.node_total);
+    ui_text_color(s_ov_nodes,
+                  g_ui.node_total && g_ui.node_online < g_ui.node_total ? UI_C_WARN : UI_C_TEXT);
+    ui_label_fmt(s_ov_fw, "v%s", g_ui.fw_version);
 
     uint32_t up = (uint32_t)(esp_timer_get_time() / 1000000);
-    lv_label_set_text_fmt(s_ov_uptime, "已运行 %lu 天 %02lu:%02lu:%02lu", (unsigned long)(up / 86400),
+    ui_label_fmt(s_ov_uptime, "已运行 %lu 天 %02lu:%02lu:%02lu", (unsigned long)(up / 86400),
                           (unsigned long)(up / 3600 % 24), (unsigned long)(up / 60 % 60), (unsigned long)(up % 60));
 }
 
@@ -128,20 +128,20 @@ void ui_fw_create(lv_obj_t *tile)
 void ui_fw_update(void)
 {
     const gw_ota_status_t *o = &g_ui.ota;
-    lv_label_set_text_fmt(s_fw_ver, "v%s", g_ui.fw_version);
-    lv_label_set_text(s_fw_part, g_ui.partition);
+    ui_label_fmt(s_fw_ver, "v%s", g_ui.fw_version);
+    ui_label_text(s_fw_part, g_ui.partition);
     switch (o->state) {
     case GW_OTA_IDLE:
-        lv_label_set_text(s_fw_state, "无");
+        ui_label_text(s_fw_state, "无");
         break;
     case GW_OTA_RECEIVING:
-        lv_label_set_text_fmt(s_fw_state, "接收 v%s", o->version);
+        ui_label_fmt(s_fw_state, "接收 v%s", o->version);
         break;
     case GW_OTA_REBOOTING:
-        lv_label_set_text_fmt(s_fw_state, "v%s 即将重启", o->version);
+        ui_label_fmt(s_fw_state, "v%s 即将重启", o->version);
         break;
     case GW_OTA_FAILED:
-        lv_label_set_text_fmt(s_fw_state, "失败：%s", o->error);
+        ui_label_fmt(s_fw_state, "失败：%s", o->error);
         break;
     }
     bool receiving = o->state == GW_OTA_RECEIVING && o->total;
@@ -149,8 +149,8 @@ void ui_fw_update(void)
     if (receiving) {
         lv_bar_set_value(s_fw_bar, (int32_t)((uint64_t)o->received * 100 / o->total), LV_ANIM_OFF);
     }
-    lv_label_set_text(s_fw_node_c3, "未上传");
-    lv_label_set_text(s_fw_node_s3, "未上传");
+    ui_label_text(s_fw_node_c3, "未上传");
+    ui_label_text(s_fw_node_s3, "未上传");
 }
 
 /* ================= 设置 ================= */
@@ -252,8 +252,8 @@ void ui_settings_create(lv_obj_t *tile)
     char buf[24];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
     snprintf(buf, sizeof(buf), MACSTR, MAC2STR(mac));
-    lv_label_set_text(kv_row(about, "MAC"), buf);
-    lv_label_set_text(kv_row(about, "IDF"), esp_app_get_description()->idf_ver);
+    ui_label_text(kv_row(about, "MAC"), buf);
+    ui_label_text(kv_row(about, "IDF"), esp_app_get_description()->idf_ver);
     b = ui_button(about, "重启网关", UI_C_ERR, reboot_cb, NULL);
     lv_obj_set_width(b, lv_pct(100));
 }
@@ -261,12 +261,12 @@ void ui_settings_create(lv_obj_t *tile)
 void ui_settings_update(void)
 {
     if (g_ui.pair_left) {
-        lv_label_set_text_fmt(s_set_pair_lbl, "停止配对（%lu 秒）", (unsigned long)g_ui.pair_left);
-        lv_obj_set_style_bg_color(s_set_pair_btn, UI_C_WARN, 0);
-        lv_label_set_text(s_set_pair_hint, "配对中：给新节点上电，加入后会出现在节点页");
+        ui_label_fmt(s_set_pair_lbl, "停止配对（%lu 秒）", (unsigned long)g_ui.pair_left);
+        ui_bg_color(s_set_pair_btn, UI_C_WARN);
+        ui_label_text(s_set_pair_hint, "配对中：给新节点上电，加入后会出现在节点页");
     } else {
-        lv_label_set_text(s_set_pair_lbl, "开始配对（60 秒）");
-        lv_obj_set_style_bg_color(s_set_pair_btn, UI_C_ACCENT, 0);
-        lv_label_set_text(s_set_pair_hint, "已配对节点重启后会自动加入，无需再次配对");
+        ui_label_text(s_set_pair_lbl, "开始配对（60 秒）");
+        ui_bg_color(s_set_pair_btn, UI_C_ACCENT);
+        ui_label_text(s_set_pair_hint, "已配对节点重启后会自动加入，无需再次配对");
     }
 }

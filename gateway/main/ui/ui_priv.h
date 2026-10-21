@@ -46,6 +46,13 @@ extern ui_model_t g_ui;
 /* 公共控件 */
 lv_obj_t *ui_card(lv_obj_t *parent);
 lv_obj_t *ui_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color, const char *text);
+/* 文字没变就不动：每次 set_text 都会触发重排和重绘（中文字体是压缩的，渲染慢），
+ * 周期刷新全用这两个，否则 LVGL 线程一直忙着画，触摸点击会丢 */
+void ui_label_text(lv_obj_t *label, const char *text);
+void ui_label_fmt(lv_obj_t *label, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/* 同理：set_style 每次都会重算样式并重绘，颜色没变就不设 */
+void ui_text_color(lv_obj_t *obj, lv_color_t c);
+void ui_bg_color(lv_obj_t *obj, lv_color_t c);
 lv_obj_t *ui_button(lv_obj_t *parent, const char *text, lv_color_t bg, lv_event_cb_t cb, void *user);
 void ui_set_hidden(lv_obj_t *obj, bool hidden);
 

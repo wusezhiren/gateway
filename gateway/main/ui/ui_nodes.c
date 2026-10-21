@@ -3,6 +3,7 @@
 #include <string.h>
 #include "esp_chip_info.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 #include "ui_priv.h"
 
 /* ================= 列表 ================= */
@@ -77,13 +78,13 @@ void ui_nodes_update(void)
         if (!n->used) {
             continue;
         }
-        lv_obj_set_style_bg_color(r->dot, n->online ? UI_C_OK : UI_C_SUB, 0);
-        lv_label_set_text(r->name, n->name);
-        lv_label_set_text_fmt(r->sub, "v%s · %d 通道", n->fw_version, n->n_ch);
+        ui_bg_color(r->dot, n->online ? UI_C_OK : UI_C_SUB);
+        ui_label_text(r->name, n->name);
+        ui_label_fmt(r->sub, "v%s · %d 通道", n->fw_version, n->n_ch);
         if (n->online) {
-            lv_label_set_text_fmt(r->rssi, "%s " LV_SYMBOL_RIGHT, ui_rssi_text(n->rssi));
+            ui_label_fmt(r->rssi, "%s " LV_SYMBOL_RIGHT, ui_rssi_text(n->rssi));
         } else {
-            lv_label_set_text(r->rssi, "离线 " LV_SYMBOL_RIGHT);
+            ui_label_text(r->rssi, "离线 " LV_SYMBOL_RIGHT);
         }
     }
 }
@@ -94,7 +95,10 @@ typedef struct {
     lv_obj_t *ctrl;     /* switch 或 slider */
     lv_obj_t *val;      /* PWM 数值 */
     uint8_t type;
+    int64_t hold_until; /* 刚操作过：节点回报新值前不用旧值覆盖，免得开关弹回去 */
 } ch_ui_t;
+
+#define HOLD_US (1500 * 1000)
 
 static lv_obj_t *s_detail;
 static int s_detail_idx = -1;
@@ -127,6 +131,7 @@ static void gesture_cb(lv_event_t *e)
 
 static void send_set(int ch, uint16_t value)
 {
+    s_ch[ch].hold_until = esp_timer_get_time() + HOLD_US;
     esp_err_t err = gw_link_set(s_detail_idx, ch, value);
     if (err == ESP_ERR_INVALID_STATE) {
         ui_toast("节点离线，无法控制");
@@ -146,7 +151,7 @@ static void slider_cb(lv_event_t *e)
     int ch = (int)(intptr_t)lv_event_get_user_data(e);
     lv_obj_t *s = lv_event_get_target(e);
     int32_t v = lv_slider_get_value(s);
-    lv_label_set_text_fmt(s_ch[ch].val, "%ld%%", (long)(v * 100 / s_dt_desc[ch].max));
+    ui_label_fmt(s_ch[ch].val, "%ld%%", (long)(v * 100 / s_dt_desc[ch].max));
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         send_set(ch, (uint16_t)v);  /* 拖动中只更新显示，松手才下发 */
     }
@@ -186,9 +191,10 @@ static void build_channels(const gw_node_t *n)
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
         s_ch[i].type = n->ch[i].type;
+        s_ch[i].hold_until = 0;
         if (n->ch[i].type == MP_CH_RELAY) {
             lv_obj_t *l = ui_label(row, &font_cn_16, UI_C_TEXT, "");
-            lv_label_set_text_fmt(l, "开关 %d", i + 1);
+            ui_label_fmt(l, "开关 %d", i + 1);
             lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
             s_ch[i].ctrl = lv_switch_create(row);
             lv_obj_align(s_ch[i].ctrl, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -196,7 +202,7 @@ static void build_channels(const gw_node_t *n)
             s_ch[i].val = NULL;
         } else {
             lv_obj_t *l = ui_label(row, &font_cn_16, UI_C_TEXT, "");
-            lv_label_set_text_fmt(l, "调光 %d", i + 1);
+            ui_label_fmt(l, "调光 %d", i + 1);
             s_ch[i].val = ui_label(row, &font_cn_16, UI_C_SUB, "");
             lv_obj_align(s_ch[i].val, LV_ALIGN_TOP_RIGHT, 0, 0);
             s_ch[i].ctrl = lv_slider_create(row);
@@ -296,10 +302,10 @@ void ui_node_detail_update(void)
         build_channels(n);  /* 节点固件升级后通道布局变了 */
     }
 
-    lv_label_set_text(s_dt_title, n->name);
-    lv_label_set_text(s_dt_state, n->online ? "在线" : "离线");
-    lv_obj_set_style_text_color(s_dt_state, n->online ? UI_C_OK : UI_C_SUB, 0);
-    lv_label_set_text_fmt(s_dt_info, "%s  v%s\n" MACSTR "\n信号 %s (%d dBm)  运行 %lu 分钟",
+    ui_label_text(s_dt_title, n->name);
+    ui_label_text(s_dt_state, n->online ? "在线" : "离线");
+    ui_text_color(s_dt_state, n->online ? UI_C_OK : UI_C_SUB);
+    ui_label_fmt(s_dt_info, "%s  v%s\n" MACSTR "\n信号 %s (%d dBm)  运行 %lu 分钟",
                           chip_name(n->chip), n->fw_version, MAC2STR(n->mac), ui_rssi_text(n->rssi), n->rssi,
                           (unsigned long)(n->uptime_s / 60));
 
@@ -310,7 +316,7 @@ void ui_node_detail_update(void)
         } else {
             lv_obj_add_state(c, LV_STATE_DISABLED);
         }
-        if (lv_obj_has_state(c, LV_STATE_PRESSED)) {
+        if (lv_obj_has_state(c, LV_STATE_PRESSED) || esp_timer_get_time() < s_ch[i].hold_until) {
             continue;   /* 正在操作，不用节点上报值覆盖 */
         }
         if (s_ch[i].type == MP_CH_RELAY) {
@@ -321,7 +327,7 @@ void ui_node_detail_update(void)
             }
         } else {
             lv_slider_set_value(c, n->value[i], LV_ANIM_OFF);
-            lv_label_set_text_fmt(s_ch[i].val, "%ld%%",
+            ui_label_fmt(s_ch[i].val, "%ld%%",
                                   (long)(n->value[i] * 100 / (s_dt_desc[i].max ? s_dt_desc[i].max : 1)));
         }
     }

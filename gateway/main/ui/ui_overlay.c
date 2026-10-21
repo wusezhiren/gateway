@@ -112,13 +112,13 @@ bool ui_overlay_update(void)
         lv_obj_move_foreground(s_ota);
         int pct = o->total ? (int)((uint64_t)o->received * 100 / o->total) : 0;
         if (o->state == GW_OTA_REBOOTING) {
-            lv_label_set_text(s_ota_title, "校验通过，正在重启");
+            ui_label_text(s_ota_title, "校验通过，正在重启");
             pct = 100;
         } else {
-            lv_label_set_text_fmt(s_ota_title, "升级网关 v%s", o->version);
+            ui_label_fmt(s_ota_title, "升级网关 v%s", o->version);
         }
         lv_bar_set_value(s_ota_bar, pct, LV_ANIM_OFF);
-        lv_label_set_text_fmt(s_ota_pct, "%d%%  请勿断电", pct);
+        ui_label_fmt(s_ota_pct, "%d%%  请勿断电", pct);
     }
 
     const gw_prov_status_t *p = &g_ui.prov;
@@ -131,16 +131,16 @@ bool ui_overlay_update(void)
             strlcpy(s_qr_text, qr, sizeof(s_qr_text));
             lv_qrcode_update(s_prov_qr, s_qr_text, strlen(s_qr_text));
         }
-        lv_label_set_text(s_prov_ssid, p->ap_ssid);
-        lv_label_set_text(s_prov_pass, p->ap_pass);
-        lv_label_set_text(s_prov_state, prov_state_text(p));
-        lv_obj_set_style_text_color(s_prov_state,
-                                    p->state == GW_PROV_DONE ? UI_C_OK :
-                                    p->state == GW_PROV_FAILED ? UI_C_ERR : UI_C_ACCENT, 0);
+        ui_label_text(s_prov_ssid, p->ap_ssid);
+        ui_label_text(s_prov_pass, p->ap_pass);
+        ui_label_text(s_prov_state, prov_state_text(p));
+        ui_text_color(s_prov_state,
+                      p->state == GW_PROV_DONE ? UI_C_OK :
+                      p->state == GW_PROV_FAILED ? UI_C_ERR : UI_C_ACCENT);
         if (p->state == GW_PROV_DONE) {
-            lv_label_set_text_fmt(s_prov_left, "%lu 秒后关闭热点", (unsigned long)p->remaining_s);
+            ui_label_fmt(s_prov_left, "%lu 秒后关闭热点", (unsigned long)p->remaining_s);
         } else {
-            lv_label_set_text_fmt(s_prov_left, "%lu 秒无操作自动退出", (unsigned long)p->remaining_s);
+            ui_label_fmt(s_prov_left, "%lu 秒无操作自动退出", (unsigned long)p->remaining_s);
         }
         ui_set_hidden(s_prov_btn, p->state == GW_PROV_DONE);
     }

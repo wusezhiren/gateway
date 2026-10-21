@@ -17,7 +17,7 @@ menu "Node"
         default ""
         help
             For boards whose outputs sit behind an IO expander, e.g. the Korvo
-            user LEDs GP_LED_1/2 on TCA9554 P6/P7. Added after the GPIO relays.
+            user LED GP_LED_2 on TCA9554 P7. Added after the GPIO relays.
 
     config NODE_EXP_ACTIVE_LOW
         bool "Expander outputs are active low"

@@ -1,3 +1,4 @@
+#include <stdarg.h>
 /*
  * UI 框架：状态栏 + 横向 tileview（概览 / 节点 / 固件 / 设置）+ 页码点，
  * 对话框、提示条、熄屏，以及 500ms 一次的数据快照刷新。所有 LVGL 调用都在 LVGL 任务里。
@@ -66,7 +67,7 @@ lv_obj_t *ui_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color, co
     lv_obj_t *l = lv_label_create(parent);
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, color, 0);
-    lv_label_set_text(l, text ? text : "");
+    ui_label_text(l, text ? text : "");
     return l;
 }
 
@@ -84,6 +85,37 @@ lv_obj_t *ui_button(lv_obj_t *parent, const char *text, lv_color_t bg, lv_event_
         lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
     }
     return b;
+}
+
+void ui_label_text(lv_obj_t *label, const char *text)
+{
+    if (strcmp(lv_label_get_text(label), text) != 0) {
+        lv_label_set_text(label, text);
+    }
+}
+
+void ui_label_fmt(lv_obj_t *label, const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    ui_label_text(label, buf);
+}
+
+void ui_text_color(lv_obj_t *obj, lv_color_t c)
+{
+    if (!lv_color_eq(lv_obj_get_style_text_color(obj, LV_PART_MAIN), c)) {
+        lv_obj_set_style_text_color(obj, c, 0);
+    }
+}
+
+void ui_bg_color(lv_obj_t *obj, lv_color_t c)
+{
+    if (!lv_color_eq(lv_obj_get_style_bg_color(obj, LV_PART_MAIN), c)) {
+        lv_obj_set_style_bg_color(obj, c, 0);
+    }
 }
 
 void ui_set_hidden(lv_obj_t *obj, bool hidden)
@@ -201,7 +233,7 @@ static void toast_timer_cb(lv_timer_t *t)
 
 void ui_toast(const char *msg)
 {
-    lv_label_set_text(lv_obj_get_child(s_toast, 0), msg);
+    ui_label_text(lv_obj_get_child(s_toast, 0), msg);
     ui_set_hidden(s_toast, false);
     lv_obj_move_foreground(s_toast);
     if (s_toast_timer) {
@@ -267,9 +299,9 @@ static int active_page(void)
 static void update_page_marks(void)
 {
     int p = active_page();
-    lv_label_set_text(s_bar_title, PAGE_TITLES[p]);
+    ui_label_text(s_bar_title, PAGE_TITLES[p]);
     for (int i = 0; i < PAGE_COUNT; i++) {
-        lv_obj_set_style_bg_color(s_dots[i], i == p ? UI_C_ACCENT : UI_C_LINE, 0);
+        ui_bg_color(s_dots[i], i == p ? UI_C_ACCENT : UI_C_LINE);
     }
 }
 
@@ -299,14 +331,14 @@ static void update_status_bar(void)
 {
     const gw_wifi_status_t *w = &g_ui.wifi;
     if (w->connected) {
-        lv_label_set_text_fmt(s_bar_wifi, LV_SYMBOL_WIFI " %s", w->ssid);
-        lv_obj_set_style_text_color(s_bar_wifi, UI_C_OK, 0);
+        ui_label_fmt(s_bar_wifi, LV_SYMBOL_WIFI " %s", w->ssid);
+        ui_text_color(s_bar_wifi, UI_C_OK);
     } else if (w->prov) {
-        lv_label_set_text(s_bar_wifi, LV_SYMBOL_WIFI " 配网中");
-        lv_obj_set_style_text_color(s_bar_wifi, UI_C_ACCENT, 0);
+        ui_label_text(s_bar_wifi, LV_SYMBOL_WIFI " 配网中");
+        ui_text_color(s_bar_wifi, UI_C_ACCENT);
     } else {
-        lv_label_set_text(s_bar_wifi, LV_SYMBOL_WIFI " 未联网");
-        lv_obj_set_style_text_color(s_bar_wifi, w->configured ? UI_C_WARN : UI_C_SUB, 0);
+        ui_label_text(s_bar_wifi, LV_SYMBOL_WIFI " 未联网");
+        ui_text_color(s_bar_wifi, w->configured ? UI_C_WARN : UI_C_SUB);
     }
 
     char clock[8] = "";
@@ -316,7 +348,7 @@ static void update_status_bar(void)
     if (tm.tm_year + 1900 >= 2025) {
         strftime(clock, sizeof(clock), "%H:%M", &tm);
     }
-    lv_label_set_text_fmt(s_bar_right, "%d/%d  %s", g_ui.node_online, g_ui.node_total, clock);
+    ui_label_fmt(s_bar_right, "%d/%d  %s", g_ui.node_online, g_ui.node_total, clock);
 }
 
 static void bind_ok_cb(void *arg)

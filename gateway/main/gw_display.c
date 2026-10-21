@@ -91,9 +91,13 @@ static esp_lcd_touch_handle_t touch_init(void)
     if (esp_lcd_new_panel_io_i2c(s_i2c, &io_cfg, &tp_io) != ESP_OK) {
         return NULL;
     }
+    /*
+     * esp_lcd_touch 先按原始坐标镜像、再交换 XY，所以 x_max/y_max 是触摸芯片原始方向（竖屏 240x280）的尺寸。
+     * 以前填成横屏的 280/240，镜像后整体左偏 40 像素，屏幕最左 40 像素点不到（返回键、对话框“取消”）。
+     */
     const esp_lcd_touch_config_t cfg = {
-        .x_max = GW_LCD_W,
-        .y_max = GW_LCD_H,
+        .x_max = GW_LCD_H - 1,
+        .y_max = GW_LCD_W - 1,
         .rst_gpio_num = -1,
         .int_gpio_num = -1,     /* 中断脚未确认，轮询读取 */
         .flags = {.swap_xy = 1, .mirror_x = 0, .mirror_y = 1},
@@ -153,6 +157,28 @@ esp_err_t gw_display_init(void)
     }
     ESP_LOGI(TAG, "display ready, touch %s", s_touch ? "ok" : "NOT FOUND");
     return ESP_OK;
+}
+
+static void touch_log_cb(lv_event_t *e)
+{
+    lv_point_t p;
+    lv_indev_get_point(lv_indev_active(), &p);
+    ESP_LOGI(TAG, "touch %s (%ld, %ld)", lv_event_get_code(e) == LV_EVENT_PRESSED ? "down" : "up",
+             (long)p.x, (long)p.y);
+}
+
+void gw_display_touch_log(bool on)
+{
+    if (!s_touch) {
+        return;
+    }
+    lvgl_port_lock(0);
+    lv_indev_remove_event_cb_with_user_data(s_touch, touch_log_cb, NULL);
+    if (on) {
+        lv_indev_add_event_cb(s_touch, touch_log_cb, LV_EVENT_PRESSED, NULL);
+        lv_indev_add_event_cb(s_touch, touch_log_cb, LV_EVENT_RELEASED, NULL);
+    }
+    lvgl_port_unlock();
 }
 
 lv_display_t *gw_display_get(void)

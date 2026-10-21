@@ -15,6 +15,7 @@
 esp_err_t gw_display_init(void);
 lv_display_t *gw_display_get(void);
 lv_indev_t *gw_display_touch(void);    /* 触摸不可用时为 NULL */
+void gw_display_touch_log(bool on);     /* 调试：打印按下 / 松开的坐标 */
 
 bool gw_display_lock(int timeout_ms);
 void gw_display_unlock(void);

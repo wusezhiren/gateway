@@ -12,6 +12,7 @@
  *   token                      打印 App/OTA 接口用的 API token
  *   ota                        查看 OTA 状态和分区
  *   nodeota <mac> <url> <sha256> [force]  下载固件并升级节点；不带参数查看状态
+ *   touch [on|off]             打印触摸坐标（核对触摸映射）
  *   exp <pin> <0|1>            设置屏幕 IO 扩展芯片引脚（找背光脚用）
  */
 #include <stdio.h>
@@ -176,6 +177,14 @@ static int cmd_keys(int argc, char **argv)
     return 0;
 }
 
+static int cmd_touch(int argc, char **argv)
+{
+    bool on = argc < 2 || strcmp(argv[1], "off") != 0;
+    gw_display_touch_log(on);
+    printf("touch log %s\n", on ? "on" : "off");
+    return 0;
+}
+
 static int cmd_token(int argc, char **argv)
 {
     printf("%s\n", gw_prov_api_token());
@@ -288,6 +297,7 @@ void gw_console_start(void)
         {.command = "wifi",   .help = "wifi [status] | wifi set <ssid> [pass] | wifi clear", .func = cmd_wifi},
         {.command = "prov",   .help = "prov [start|stop|status], provisioning softap", .func = cmd_prov},
         {.command = "keys",   .help = "keys [on|off], log key ADC readings", .func = cmd_keys},
+        {.command = "touch",  .help = "touch [on|off], log touch points", .func = cmd_touch},
         {.command = "token",  .help = "Print API token for app / OTA", .func = cmd_token},
         {.command = "cloud",  .help = "cloud [status|set <host> <port> <user> <pass>|off]", .func = cmd_cloud},
         {.command = "ota",    .help = "ota | ota url <https-url> <sha256> [force], show status or download & upgrade", .func = cmd_ota},

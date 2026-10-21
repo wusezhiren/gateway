@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.homenet.espgw.data.ApiException
+import com.homenet.espgw.data.AppRelease
+import com.homenet.espgw.data.AppUpdate
 import com.homenet.espgw.data.CloudConfig
 import com.homenet.espgw.data.CloudLink
 import com.homenet.espgw.data.Discovery
@@ -22,6 +24,7 @@ import com.homenet.espgw.data.GatewayStore
 import com.homenet.espgw.data.GwApi
 import com.homenet.espgw.data.GwInfo
 import com.homenet.espgw.data.Node
+import com.homenet.espgw.data.gatewayErrorText
 import com.homenet.espgw.data.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +39,8 @@ import java.io.InputStream
 sealed interface OtaUi {
     data object Idle : OtaUi
     data class Uploading(val sent: Long, val total: Long) : OtaUi
+    /** 远程升级：网关自己下载中；started 为 false 时命令还没被网关接受 */
+    data class Downloading(val received: Long, val total: Long, val version: String, val started: Boolean) : OtaUi
     data class Rebooting(val version: String) : OtaUi
     data class Done(val version: String) : OtaUi
     data class Failed(val msg: String) : OtaUi
@@ -49,7 +54,7 @@ enum class Transport { None, Lan, Cloud }
 /**
  * 已绑定网关的主界面。
  * 配了云端时优先走云端（网关状态由 MQTT 推送），否则或云端不通时走局域网 HTTP 轮询。
- * 网关固件升级只走局域网。
+ * 网关固件升级：局域网内直接上传 App 内置固件；只有云端时下发 ota 命令，网关自己从发布仓库下载。
  */
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val store = GatewayStore(app)
@@ -86,6 +91,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     /** 云端通知的最新 App versionCode（发版脚本发布到 espgw/app/latest） */
     var appLatestCode by mutableStateOf<Int?>(null)
         private set
+    /** 发布仓库里的最新版本（远程升级网关用其中的网关固件） */
+    var latestRelease by mutableStateOf<AppRelease?>(null)
+        private set
+    private var releaseFetchedAt = 0L
+    private var otaWatchJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -128,6 +138,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (pollJob?.isActive == true) return
         watchNetwork()
         startCloud()
+        fetchRelease()
         pollJob = viewModelScope.launch {
             while (isActive) {
                 tick()
@@ -186,6 +197,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         cloudJobs += viewModelScope.launch {
             link.state.collect { st ->
                 st ?: return@collect
+                trackOta(st.info)
                 // 局域网直连时以 HTTP 轮询为准，避免两边数据来回跳
                 if (transport != Transport.Lan) {
                     info = st.info
@@ -266,9 +278,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             lanOk = true
             transport = Transport.Lan
             if (!cloudSynced) syncCloudFromGateway(api, i)
-            (ota as? OtaUi.Rebooting)?.let {
-                if (i.version == it.version) ota = OtaUi.Done(it.version)
-            }
+            trackOta(i)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -380,6 +390,86 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             return Firmware.compareVersions(fw.version, cur) > 0
         }
 
+    // ---------- 远程升级（云端下发，网关自己下载） ----------
+
+    private fun fetchRelease() {
+        val now = System.currentTimeMillis()
+        if (now - releaseFetchedAt < 10 * 60_000) return
+        viewModelScope.launch {
+            runCatching { AppUpdate.fetchLatest() }.onSuccess {
+                latestRelease = it
+                releaseFetchedAt = now
+            }
+        }
+    }
+
+    /** 只能走云端，且发布仓库里的网关固件比网关当前版本新 */
+    val remoteUpgradable: Boolean
+        get() {
+            val rel = latestRelease ?: return false
+            val cur = info?.version ?: return false
+            return transport == Transport.Cloud && rel.gatewayUrl.isNotBlank() &&
+                rel.gatewaySha256.length == 64 && Firmware.compareVersions(rel.gatewayVersion, cur) > 0
+        }
+
+    fun upgradeRemote() {
+        val rel = latestRelease ?: return
+        val c = cloud ?: return
+        viewModelScope.launch {
+            ota = OtaUi.Downloading(0, 0, rel.gatewayVersion, started = false)
+            try {
+                c.command(
+                    "ota",
+                    JSONObject().put("url", rel.gatewayUrl).put("sha256", rel.gatewaySha256)
+                        .put("version", rel.gatewayVersion),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ota = OtaUi.Failed(e.userMessage())
+                return@launch
+            }
+            (ota as? OtaUi.Downloading)?.let { if (!it.started) ota = it.copy(started = true) }
+        }
+    }
+
+    /** 根据网关上报的 ota 状态推进升级界面（局域网和云端两条路都会调） */
+    private fun trackOta(i: GwInfo) {
+        when (val cur = ota) {
+            is OtaUi.Downloading -> {
+                if (i.version == cur.version) {
+                    ota = OtaUi.Done(cur.version)  // 没赶上 rebooting 状态，网关已经以新版本回来
+                    return
+                }
+                if (!cur.started && i.ota.state != "receiving") return  // 还是命令发出前的旧状态
+                when (i.ota.state) {
+                    "receiving" -> ota = cur.copy(received = i.ota.received, total = i.ota.total, started = true)
+                    "rebooting" -> rebooting(cur.version, remote = true)
+                    "failed" -> ota = OtaUi.Failed(gatewayErrorText(i.ota.error))
+                }
+            }
+            is OtaUi.Rebooting -> when {
+                i.version == cur.version -> ota = OtaUi.Done(cur.version)
+                i.ota.rolledBack == cur.version ->
+                    ota = OtaUi.Failed("新固件 v${cur.version} 启动后没能连上网络，已自动回滚到 v${i.version}")
+            }
+            else -> Unit
+        }
+    }
+
+    /**
+     * 等网关以新版本回来。新固件要连上 Wi-Fi 和云端才确认，确认不了 180 秒后回滚，
+     * 所以远程升级要等得更久。
+     */
+    private fun rebooting(version: String, remote: Boolean) {
+        ota = OtaUi.Rebooting(version)
+        otaWatchJob?.cancel()
+        otaWatchJob = viewModelScope.launch {
+            delay(if (remote) 300_000 else 60_000)
+            if (ota is OtaUi.Rebooting) ota = OtaUi.Failed("网关没有以 v$version 启动，可能已回滚，请查看网关屏幕")
+        }
+    }
+
     private fun upload(force: Boolean, retryForce: () -> Unit, open: suspend () -> Pair<Long, InputStream>) {
         val api = api() ?: return
         viewModelScope.launch {
@@ -389,10 +479,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 val version = stream.use { input ->
                     api.otaGateway(input, size, force) { sent -> ota = OtaUi.Uploading(sent, size) }
                 }
-                ota = OtaUi.Rebooting(version)
-                // 60 秒内没看到新版本算失败（可能被回滚）
-                delay(60_000)
-                if (ota is OtaUi.Rebooting) ota = OtaUi.Failed("网关没有以 v$version 启动，可能已回滚，请查看网关屏幕")
+                rebooting(version, remote = false)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {

@@ -66,11 +66,14 @@ static void on_ota(const gw_ota_status_t *st)
     gw_cloud_notify();
 }
 
-#define VALIDATE_TIMEOUT_S 120
+#define VALIDATE_TIMEOUT_S 180
 
 /*
- * OTA 后首次启动处于 PENDING_VERIFY：ESP-NOW 已启动，且 Wi-Fi 连上（或未配置路由器）即确认有效。
- * 路由器故障不应导致回滚，所以超时后也确认；新固件若在确认前崩溃重启，bootloader 会自动回滚。
+ * OTA 后首次启动处于 PENDING_VERIFY，必须证明新固件"还能被远程管理"才确认有效：
+ * ESP-NOW 已启动（走到这里即是），Wi-Fi 连上，配了云端的话云端也要连上。
+ * 超时就回滚到旧固件——旧固件是确认过能用的，宁可回滚也不能留下一个连不上的网关
+ * （路由器恰好故障时也会回滚，代价只是这次升级作废）。
+ * 新固件在确认前崩溃或看门狗复位，bootloader 同样会回滚。没配过路由器时直接确认。
  */
 static void validate_task(void *arg)
 {
@@ -79,16 +82,20 @@ static void validate_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(2000));
     abort();
 #endif
-    for (int i = 0; i < VALIDATE_TIMEOUT_S; i++) {
-        gw_wifi_status_t st;
-        gw_wifi_get_status(&st);
-        if (!st.configured || st.connected) {
-            break;
+    bool ok = false;
+    for (int i = 0; i < VALIDATE_TIMEOUT_S && !ok; i++) {
+        gw_wifi_status_t ws;
+        gw_cloud_status_t cs;
+        gw_wifi_get_status(&ws);
+        gw_cloud_get_status(&cs);
+        ok = !ws.configured || (ws.connected && (!cs.configured || cs.connected));
+        if (!ok) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
-        if (i == VALIDATE_TIMEOUT_S - 1) {
-            ESP_LOGW(TAG, "router not reachable, accept new firmware anyway");
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    if (!ok) {
+        ESP_LOGE(TAG, "new firmware can't reach router/cloud in %ds, rolling back", VALIDATE_TIMEOUT_S);
+        esp_ota_mark_app_invalid_rollback_and_reboot();
     }
     ESP_ERROR_CHECK(esp_ota_mark_app_valid_cancel_rollback());
     ESP_LOGI(TAG, "new firmware marked valid");

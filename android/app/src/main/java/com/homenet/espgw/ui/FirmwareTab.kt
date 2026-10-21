@@ -27,7 +27,8 @@ fun FirmwareTab(vm: HomeViewModel) {
     }
     val info = vm.info
     val ota = vm.ota
-    val busy = ota is OtaUi.Uploading || ota is OtaUi.Rebooting
+    val busy = ota is OtaUi.Uploading || ota is OtaUi.Downloading || ota is OtaUi.Rebooting
+    val remote = !vm.lanOk && vm.transport == Transport.Cloud
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -41,14 +42,26 @@ fun FirmwareTab(vm: HomeViewModel) {
                 vm.bundledGateway?.let { "v${it.version}" + if (vm.gatewayUpgradable) "（可升级）" else "" } ?: "无",
                 if (vm.gatewayUpgradable) OkGreen else androidx.compose.ui.graphics.Color.Unspecified,
             )
+            vm.latestRelease?.takeIf { it.gatewayUrl.isNotBlank() }?.let { rel ->
+                InfoRow(
+                    "最新发布",
+                    "v${rel.gatewayVersion}" + if (vm.remoteUpgradable) "（可远程升级）" else "",
+                    if (vm.remoteUpgradable) OkGreen else androidx.compose.ui.graphics.Color.Unspecified,
+                )
+            }
             Text(
-                "选择签名后的网关固件（esp_s3_gateway.bin）。网关会校验签名，升级后自动重启，失败会自动回滚。",
+                if (remote) {
+                    "不在局域网时，网关会自己从发布仓库下载固件，校验签名和 SHA-256 后重启；" +
+                        "新固件连不上 Wi-Fi 或云端会自动回滚到当前版本。"
+                } else {
+                    "选择签名后的网关固件（esp_s3_gateway.bin）。网关会校验签名，升级后自动重启，失败会自动回滚。"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            if (!vm.lanOk && !busy) {
-                Text("固件升级需要手机和网关在同一局域网", color = MaterialTheme.colorScheme.error,
+            if (!vm.lanOk && !remote && !busy) {
+                Text("固件升级需要手机和网关在同一局域网，或网关连上云端", color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
             when (ota) {
@@ -56,6 +69,18 @@ fun FirmwareTab(vm: HomeViewModel) {
                     val f = if (ota.total > 0) ota.sent.toFloat() / ota.total else 0f
                     Text("上传中 ${(f * 100).toInt()}%  请勿关闭 App", modifier = Modifier.padding(top = 12.dp))
                     LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+                is OtaUi.Downloading -> {
+                    val f = if (ota.total > 0) ota.received.toFloat() / ota.total else 0f
+                    Text(
+                        if (ota.total > 0) "网关下载中 ${(f * 100).toInt()}%" else "等待网关开始下载…",
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                    if (ota.total > 0) {
+                        LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                    } else {
+                        LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+                    }
                 }
                 is OtaUi.Rebooting -> {
                     Text("校验通过，网关正在重启到 v${ota.version}…", modifier = Modifier.padding(top = 12.dp))
@@ -81,6 +106,16 @@ fun FirmwareTab(vm: HomeViewModel) {
                     enabled = !busy && vm.lanOk,
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 ) { Text("升级到 v${fw.version}") }
+            }
+            vm.latestRelease?.takeIf { remote && vm.remoteUpgradable }?.let { rel ->
+                Button(
+                    onClick = {
+                        vm.ota = OtaUi.Idle
+                        vm.upgradeRemote()
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                ) { Text("远程升级到 v${rel.gatewayVersion}") }
             }
             OutlinedButton(
                 onClick = {

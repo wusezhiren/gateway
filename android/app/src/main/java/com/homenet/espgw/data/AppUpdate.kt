@@ -23,6 +23,9 @@ data class AppRelease(
     val size: Long,
     val notes: String,
     val gatewayVersion: String,
+    /** 同一次发布的网关固件，远程升级时网关自己下载 */
+    val gatewayUrl: String,
+    val gatewaySha256: String,
 ) {
     companion object {
         fun parse(o: JSONObject) = AppRelease(
@@ -33,6 +36,8 @@ data class AppRelease(
             size = o.optLong("size"),
             notes = o.optString("notes"),
             gatewayVersion = o.optString("gatewayVersion"),
+            gatewayUrl = o.optString("gatewayUrl"),
+            gatewaySha256 = o.optString("gatewaySha256").lowercase(),
         )
     }
 }

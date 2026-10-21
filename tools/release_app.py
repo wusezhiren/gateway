@@ -6,7 +6,7 @@
 步骤：
   1. 编译网关固件（签名），版本 --gw-version（默认取 gateway/CMakeLists.txt）
   2. 打 App release 包（发布签名，内置网关固件），版本号即参数
-  3. 在 gitee 发布仓库建 Release vX.Y.Z，上传 APK，更新 version.json
+  3. 在 gitee 发布仓库建 Release vX.Y.Z，上传 APK 和网关固件，更新 version.json
   4. 往云端 espgw/app/latest 发布保留消息（需要 pip install paho-mqtt）
 
 本地凭据（local/，不上传）：
@@ -159,6 +159,11 @@ def main():
     out = ROOT / 'android' / 'app' / 'build' / 'outputs' / name
     shutil.copy(APK, out)
     data = out.read_bytes()
+    # 网关固件也作为附件发布：远程升级时网关自己下载（App 通过云端下发地址和 SHA-256）
+    gw_name = f'esp_s3_gateway-{gw_ver}.bin'
+    gw_out = out.parent / gw_name
+    shutil.copy(GW_BIN, gw_out)
+    gw_data = gw_out.read_bytes()
     manifest = {
         'versionCode': version_code(a.version),
         'versionName': a.version,
@@ -167,6 +172,9 @@ def main():
         'size': len(data),
         'notes': a.notes,
         'gatewayVersion': gw_ver,
+        'gatewayUrl': f'https://gitee.com/{OWNER}/{REPO}/releases/download/{tag}/{gw_name}',
+        'gatewaySha256': hashlib.sha256(gw_data).hexdigest(),
+        'gatewaySize': len(gw_data),
     }
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
     if a.copy_to:
@@ -182,6 +190,10 @@ def main():
     if att.get('browser_download_url'):
         manifest['url'] = att['browser_download_url']
     print('已上传', manifest['url'])
+    att = gitee('POST', f'/releases/{rel["id"]}/attach_files', files={'file': gw_out})
+    if att.get('browser_download_url'):
+        manifest['gatewayUrl'] = att['browser_download_url']
+    print('已上传', manifest['gatewayUrl'])
     old = gitee('GET', '/contents/version.json')
     content = __import__('base64').b64encode(
         (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()).decode()

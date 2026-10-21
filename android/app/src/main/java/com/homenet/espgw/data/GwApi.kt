@@ -176,29 +176,32 @@ class GwApi(
 }
 
 /** 错误码转成给用户看的文字 */
+/** 网关错误码（HTTP 和云端共用，含固件升级的失败原因） */
+fun gatewayErrorText(error: String): String = when (error) {
+    "unauthorized" -> "网关拒绝访问（token 无效，请重新绑定）"
+    "offline" -> "节点离线"
+    "no_such_node" -> "节点不存在"
+    "busy" -> "网关忙，请稍后重试"
+    "not_newer" -> "版本不高于网关当前版本"
+    "wrong_project" -> "不是网关固件"
+    "not_an_app_image" -> "不是 ESP 固件文件"
+    "invalid_image_or_signature" -> "固件损坏或签名不对"
+    "too_large" -> "固件太大"
+    "not_provisioning" -> "网关不在配网模式"
+    "invalid_ssid_or_password" -> "Wi-Fi 名称或密码格式不对（密码 8~63 位）"
+    "timeout" -> "网关没有响应（云端）"
+    "gateway_offline" -> "网关不在线"
+    "connect_failed", "download_http_error", "too_many_redirects", "no_content_length" -> "网关下载固件失败（连不上下载服务器）"
+    "download_failed", "incomplete" -> "网关下载固件中断"
+    "sha256_mismatch" -> "网关下载的固件校验不对"
+    "bad_url", "bad_sha256" -> "固件下载信息有误"
+    "no_mem" -> "网关内存不足"
+    else -> "网关错误：$error"
+}
+
 fun Throwable.userMessage(): String = when (this) {
-    is ApiException -> when (error) {
-        "unauthorized" -> "网关拒绝访问（token 无效，请重新绑定）"
-        "offline" -> "节点离线"
-        "no_such_node" -> "节点不存在"
-        "busy" -> "网关忙，请稍后重试"
-        "not_newer" -> "版本不高于网关当前版本"
-        "wrong_project" -> "不是网关固件"
-        "not_an_app_image" -> "不是 ESP 固件文件"
-        "invalid_image_or_signature" -> "固件损坏或签名不对"
-        "too_large" -> "固件太大"
-        "not_provisioning" -> "网关不在配网模式"
-        "invalid_ssid_or_password" -> "Wi-Fi 名称或密码格式不对（密码 8~63 位）"
-        else -> "网关错误：$error"
-    }
-    is CloudException -> when (error) {
-        "unauthorized" -> "网关拒绝访问（token 无效，请重新绑定）"
-        "offline" -> "节点离线"
-        "no_such_node" -> "节点不存在"
-        "timeout" -> "网关没有响应（云端）"
-        "gateway_offline" -> "网关不在线"
-        else -> "网关错误：$error"
-    }
+    is ApiException -> gatewayErrorText(error)
+    is CloudException -> gatewayErrorText(error)
     is java.net.SocketTimeoutException -> "连接网关超时"
     is java.net.ConnectException, is java.net.NoRouteToHostException -> "连不上网关"
     else -> message ?: javaClass.simpleName

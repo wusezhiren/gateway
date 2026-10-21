@@ -115,7 +115,11 @@ bool ui_overlay_update(void)
             ui_label_text(s_ota_title, "校验通过，正在重启");
             pct = 100;
         } else {
-            ui_label_fmt(s_ota_title, "升级网关 v%s", o->version);
+            if (o->version[0]) {
+                ui_label_fmt(s_ota_title, "升级网关 v%s", o->version);
+            } else {
+                ui_label_text(s_ota_title, "升级网关");
+            }
         }
         lv_bar_set_value(s_ota_bar, pct, LV_ANIM_OFF);
         ui_label_fmt(s_ota_pct, "%d%%  请勿断电", pct);

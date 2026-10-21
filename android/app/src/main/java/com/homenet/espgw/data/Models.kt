@@ -32,6 +32,8 @@ data class OtaStatus(
     val total: Long,
     val version: String,
     val error: String,
+    /** 上次升级的版本没通过开机确认，已回滚（空：没有） */
+    val rolledBack: String = "",
 )
 
 /** GET /api/info */
@@ -81,6 +83,7 @@ data class GwInfo(
                     total = ota.optLong("total"),
                     version = ota.optString("version"),
                     error = ota.optString("error"),
+                    rolledBack = ota.optString("rolled_back"),
                 ),
                 cloudConfigured = cloud.optBoolean("configured"),
                 cloudConnected = cloud.optBoolean("connected"),

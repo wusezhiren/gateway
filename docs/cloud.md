@@ -51,9 +51,29 @@ App 在任何网络下都能控制网关，不需要端口映射或 VPN。
 | `unpair` | `mac` | `POST /api/nodes/unpair` |
 | `pair` | `seconds`（0~300） | `POST /api/pair` |
 | `get` | — | 只触发一次 `state` 发布 |
+| `ota` | `url`（https）、`sha256`（64 位十六进制）、`version`（可选，仅显示）、`force`（可选） | 无（远程升级专用，见下） |
 
 回复：`{"id": "a1b2c3", "ok": true}` 或 `{"id": "a1b2c3", "ok": false, "error": "offline"}`，错误码与 HTTP 接口相同，
 另有 `unauthorized`（token 不对）、`bad_op`。执行后网关会发布新的 `state`。
+
+## 远程升级网关（ota）
+
+不在局域网时，App 从发布仓库的 `version.json` 取 `gatewayUrl` / `gatewaySha256`，发 `ota` 命令，
+**网关自己用 HTTPS 下载**（跟随 gitee 的跨域跳转，证书用 IDF 证书包校验），边下边写空闲 OTA 分区。
+
+- 回复 `ok: true` 只表示已开始；进度和结果看 `state.info.ota`：
+  `state` = `receiving`（`received` / `total`）→ `rebooting` → 网关以新版本重新上线；或 `failed` + `error`
+- 立即拒绝：`bad_url`（非 https）、`bad_sha256`、`busy`、`no_mem`
+- 下载后拒绝（当前固件照常运行）：`not_newer` / `wrong_project` / `not_an_app_image`（读到镜像头就拒绝，不擦写）、
+  `connect_failed` / `download_http_error` / `download_failed` / `incomplete`、`sha256_mismatch`、`invalid_image_or_signature`
+
+防变砖：
+
+1. 只写空闲 OTA 分区；bootloader、分区表、正在运行的分区永不改写，断电或断网只会让这次升级作废
+2. 切换启动分区前：SHA-256 与命令一致 + `esp_ota_end` 校验镜像完整性和 RSA 签名
+3. 新固件首次启动必须在 180 秒内**连上 Wi-Fi 和云端**（配了云端时）才确认有效，否则自动回滚；
+   确认前崩溃或看门狗复位，bootloader 也会回滚。回滚后 `info.ota.rolled_back` 给出被回滚的版本
+4. App 只在 `gatewayVersion` 高于网关当前版本时提供远程升级，不做降级
 
 ## 安全
 

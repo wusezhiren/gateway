@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "esp_console.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
@@ -205,6 +206,12 @@ static int cmd_cloud(int argc, char **argv)
 
 static int cmd_ota(int argc, char **argv)
 {
+    if (argc >= 4 && strcmp(argv[1], "url") == 0) {
+        bool force = argc >= 5 && strcmp(argv[4], "force") == 0;
+        const char *err = gw_ota_start_url(argv[2], argv[3], NULL, force);
+        printf("%s\n", err ? err : "started");
+        return err ? 1 : 0;
+    }
     const esp_app_desc_t *app = esp_app_get_description();
     const esp_partition_t *run = esp_ota_get_running_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
@@ -216,6 +223,10 @@ static int cmd_ota(int argc, char **argv)
            run->label, (int)state, next ? next->label : "-");
     printf("ota: %s %s %lu/%lu %s\n", gw_ota_state_name(st.state), st.version,
            (unsigned long)st.received, (unsigned long)st.total, st.error);
+    printf("heap: internal %u (largest %u), psram %u\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return 0;
 }
 
@@ -253,7 +264,7 @@ void gw_console_start(void)
         {.command = "keys",   .help = "keys [on|off], log key ADC readings", .func = cmd_keys},
         {.command = "token",  .help = "Print API token for app / OTA", .func = cmd_token},
         {.command = "cloud",  .help = "cloud [status|set <host> <port> <user> <pass>|off]", .func = cmd_cloud},
-        {.command = "ota",    .help = "Show OTA status and partitions", .func = cmd_ota},
+        {.command = "ota",    .help = "ota | ota url <https-url> <sha256> [force], show status or download & upgrade", .func = cmd_ota},
         {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {

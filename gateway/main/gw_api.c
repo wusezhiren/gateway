@@ -225,6 +225,12 @@ cJSON *gw_api_info_json(void)
     if (os.error[0]) {
         cJSON_AddStringToObject(ota, "error", os.error);
     }
+    /* 上次升级的固件没通过开机确认、已回滚：告诉 App 是哪个版本 */
+    const esp_partition_t *bad = esp_ota_get_last_invalid_partition();
+    esp_app_desc_t bad_desc;
+    if (bad && esp_ota_get_partition_description(bad, &bad_desc) == ESP_OK) {
+        cJSON_AddStringToObject(ota, "rolled_back", bad_desc.version);
+    }
     cJSON *c = cJSON_AddObjectToObject(o, "cloud");
     cJSON_AddBoolToObject(c, "configured", cs.configured);
     cJSON_AddBoolToObject(c, "connected", cs.connected);
@@ -323,6 +329,13 @@ const char *gw_api_exec(const cJSON *cmd)
         return op_pair(cmd);
     } else if (strcmp(op, "get") == 0) {
         return NULL;
+    } else if (strcmp(op, "ota") == 0) {
+        /* 远程升级：网关自己下载，结果看 state 里的 ota */
+        const cJSON *force = cJSON_GetObjectItem(cmd, "force");
+        return gw_ota_start_url(cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "url")),
+                                cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "sha256")),
+                                cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "version")),
+                                cJSON_IsTrue(force));
     }
     return "bad_op";
 }

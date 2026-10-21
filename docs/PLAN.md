@@ -20,7 +20,7 @@
 | 配网 | SoftAP + 强制门户网页 + App 配网接口 | 不装 App 也能用浏览器配网 |
 | 屏幕 UI | LVGL v9 + `esp_lvgl_port` + CST816T 触摸 | 中文界面，字体子集 |
 | 手机端 | Android 原生（Kotlin + Jetpack Compose） | 局域网 HTTP + WebSocket，mDNS 发现网关 |
-| OTA 范围 | 仅局域网 | App/PC 上传固件到网关；外网升级暂不做 |
+| OTA 范围 | 局域网 + 远程 | 局域网：App/PC 上传；远程：云端下发 ota 命令，网关自己从 gitee 下载（见 docs/cloud.md） |
 | 镜像签名 | `SECURE_SIGNED_APPS_NO_SECURE_BOOT`，RSA-3072 | 不烧 eFuse、可撤销；不开硬件 Secure Boot |
 | 节点 Flash | 4MB | 双 OTA 槽各 1.5MB |
 
@@ -171,6 +171,10 @@ docs/                   计划、ESP-NOW 协议、App API 文档
   - 0.1.0 → 0.2.0 升级成功，`ota_1` 启动，2.4 秒确认有效
   - **回滚**：OTA 一个确认前 abort 的 0.3.0（`GW_TEST_ABORT_BEFORE_VALIDATE`），bootloader 自动回到 0.2.0
   - `force=1` 降级回 0.1.0，回滚后的分区可再次写入
+- [x] 远程升级（网关 0.4.5 起）：云端 `ota` 命令，网关 HTTPS 下载 + SHA-256 + 签名；开机确认要求 Wi-Fi 和云端都连上
+  - TLS 缓冲和 Wi-Fi/LWIP 改放 PSRAM（`MBEDTLS_EXTERNAL_MEM_ALLOC`），否则第二条 TLS 连接 `no_mem`
+  - 实测：gitee 2MB 约 35 秒；SHA-256 错拒绝、token/地址/格式错拒绝、版本不新读头即拒绝、域名不通 `connect_failed`，均不影响运行
+  - **回滚**：云端配置故意改错后强制装 0.4.4，180 秒连不上云端自动回滚到 0.4.5，`rolled_back` 上报 0.4.4
 
 ### 3b 节点升级（ESP-NOW 分片）
 

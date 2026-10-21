@@ -23,6 +23,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -163,8 +164,11 @@ class CloudLink(
 
     fun close() {
         connectJob?.cancel()
-        runCatching { client.disconnectForcibly(0, 0) }
-        runCatching { client.close(true) }
         _connected.value = false
+        // Paho 的断开是同步的（超时 0 表示一直等到 DISCONNECT 发出），放到主线程会 ANR
+        thread(isDaemon = true, name = "mqtt-close") {
+            runCatching { client.disconnectForcibly(0, 1000) }
+            runCatching { client.close(true) }
+        }
     }
 }

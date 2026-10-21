@@ -17,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 private enum class Screen { Setup, Provision, Bind, Home }
@@ -29,6 +30,10 @@ fun EspGwApp() {
     LaunchedEffect(Unit) { upd.check(manual = false) }
     // 云端通知有新版本时再查一次
     LaunchedEffect(home.appLatestCode) { if (home.appLatestCode != null) upd.check(manual = false) }
+    LifecycleResumeEffect(Unit) {
+        upd.onResume()
+        onPauseOrDispose { }
+    }
     if (upd.showDialog) UpdateDialog(upd)
     var adding by rememberSaveable { mutableStateOf<Screen?>(null) }
     val screen = adding ?: if (home.gateway == null) Screen.Setup else Screen.Home

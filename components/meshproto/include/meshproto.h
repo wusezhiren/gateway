@@ -30,6 +30,12 @@ typedef enum {
     MP_SET       = 5,   /* 网关 -> 节点：设置通道值 */
     MP_STATE     = 6,   /* 节点 -> 网关：状态上报，ack_seq 对应 SET 的 seq */
     MP_LEAVE     = 7,   /* 网关 -> 节点：解除配对，节点清除网关信息 */
+    /* 固件升级（见 docs/protocol.md「节点升级」），老固件不认识这些类型会直接丢弃 */
+    MP_OTA_BEGIN = 8,   /* 网关 -> 节点：开始升级，节点准备空闲 OTA 分区 */
+    MP_OTA_DATA  = 9,   /* 网关 -> 节点：一片数据 */
+    MP_OTA_ACK   = 10,  /* 节点 -> 网关：已连续写入的字节数 / 错误码，hdr.seq 回应请求的 seq */
+    MP_OTA_END   = 11,  /* 网关 -> 节点：发完，节点校验后切换启动分区并重启 */
+    MP_OTA_ABORT = 12,  /* 网关 -> 节点：取消 */
 } mp_type_t;
 
 typedef enum {
@@ -90,6 +96,52 @@ typedef struct __attribute__((packed)) {
     uint16_t value;
 } mp_set_t;
 
+#define MP_OTA_CHUNK        200     /* 每片数据字节数，兼容 ESP-NOW v1 的 250 字节上限 */
+#define MP_OTA_F_FORCE      0x01    /* BEGIN：允许不比当前新的版本 */
+#define MP_OTA_F_ACK_REQ    0x01    /* DATA：节点收到这片后回 ACK */
+
+typedef enum {
+    MP_OTA_OK = 0,
+    MP_OTA_ERR_SIZE,        /* 大小超出 OTA 分区 */
+    MP_OTA_ERR_BEGIN,       /* esp_ota_begin 失败（如当前固件尚未确认） */
+    MP_OTA_ERR_WRITE,       /* 写 flash 失败 */
+    MP_OTA_ERR_NO_SESSION,  /* 没有进行中的升级 */
+    MP_OTA_ERR_INCOMPLETE,  /* END 时数据不全 */
+    MP_OTA_ERR_SHA256,      /* SHA-256 与 BEGIN 不符 */
+    MP_OTA_ERR_IMAGE,       /* 镜像或签名校验失败 */
+    MP_OTA_ERR_PROJECT,     /* 工程名与节点不符 */
+    MP_OTA_ERR_NOT_NEWER,   /* 版本不比当前新 */
+} mp_ota_status_t;
+
+typedef struct __attribute__((packed)) {
+    mp_hdr_t hdr;
+    uint32_t size;
+    uint8_t  sha256[32];
+    char     version[MP_VER_LEN];   /* 仅用于日志 */
+    uint8_t  flags;                 /* MP_OTA_F_FORCE */
+} mp_ota_begin_t;
+
+typedef struct __attribute__((packed)) {
+    mp_hdr_t hdr;
+    uint32_t offset;
+    uint8_t  len;                   /* 1..MP_OTA_CHUNK，帧长 = 头 + len */
+    uint8_t  flags;                 /* MP_OTA_F_ACK_REQ */
+    uint8_t  data[MP_OTA_CHUNK];
+} mp_ota_data_t;
+
+#define MP_OTA_DATA_HDR_LEN ((int)(sizeof(mp_ota_data_t) - MP_OTA_CHUNK))
+
+typedef struct __attribute__((packed)) {
+    mp_hdr_t hdr;
+    uint32_t offset;                /* 已连续写入的字节数 */
+    uint8_t  status;                /* mp_ota_status_t */
+} mp_ota_ack_t;
+
+typedef struct __attribute__((packed)) {
+    mp_hdr_t hdr;
+} mp_ota_end_t, mp_ota_abort_t;
+
+_Static_assert(sizeof(mp_ota_data_t) <= ESP_NOW_MAX_DATA_LEN, "frame too large");
 _Static_assert(sizeof(mp_join_req_t) <= ESP_NOW_MAX_DATA_LEN, "frame too large");
 
 extern const uint8_t MP_BROADCAST[6];

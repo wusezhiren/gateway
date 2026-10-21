@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "gw_link.h"
+#include "gw_node_ota.h"
 
 static const char *TAG = "gw_link";
 
@@ -265,6 +266,7 @@ static void handle_join(const rx_msg_t *m)
         save_table();
     }
     n->resync = true;
+    n->joins++;
 
     if (mp_peer_upsert(n->mac, true) != ESP_OK) {
         ESP_LOGE(TAG, "add peer " MACSTR " failed", MAC2STR(n->mac));
@@ -407,6 +409,9 @@ static void link_task(void *arg)
             case MP_STATE:
                 handle_state(&m, type);
                 break;
+            case MP_OTA_ACK:
+                gw_node_ota_on_ack(m.src, m.data, m.len);
+                break;
             default:
                 break;
             }
@@ -465,6 +470,20 @@ void gw_link_snapshot(gw_node_t out[GW_MAX_NODES])
     LOCK();
     memcpy(out, s_nodes, sizeof(s_nodes));
     UNLOCK();
+}
+
+bool gw_link_get_node(const uint8_t mac[6], gw_node_t *out, int *idx)
+{
+    LOCK();
+    int i = find_node(mac);
+    if (i >= 0) {
+        *out = s_nodes[i];
+        if (idx) {
+            *idx = i;
+        }
+    }
+    UNLOCK();
+    return i >= 0;
 }
 
 esp_err_t gw_link_set(int idx, uint8_t ch, uint16_t value)

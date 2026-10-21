@@ -16,6 +16,7 @@
 #include "gw_cloud.h"
 #include "gw_http.h"
 #include "gw_link.h"
+#include "gw_node_ota.h"
 #include "gw_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
@@ -24,7 +25,7 @@ static const char *TAG = "gw_api";
 
 #define BIND_TIMEOUT_US   (60 * 1000000LL)  /* 等待屏幕确认 */
 #define BIND_KEEP_US      (30 * 1000000LL)  /* 结果保留，供 App 轮询取走 */
-#define BODY_MAX          256
+#define BODY_MAX          1024
 
 typedef enum { BIND_NONE, BIND_PENDING, BIND_ALLOWED, BIND_DENIED } bind_state_t;
 
@@ -231,6 +232,22 @@ cJSON *gw_api_info_json(void)
     if (bad && esp_ota_get_partition_description(bad, &bad_desc) == ESP_OK) {
         cJSON_AddStringToObject(ota, "rolled_back", bad_desc.version);
     }
+    gw_node_ota_status_t ns;
+    gw_node_ota_get_status(&ns);
+    cJSON *no = cJSON_AddObjectToObject(o, "node_ota");
+    cJSON_AddStringToObject(no, "state", gw_node_ota_state_name(ns.state));
+    if (ns.state != GW_NODE_OTA_IDLE) {
+        snprintf(mac_str, sizeof(mac_str), MACSTR, MAC2STR(ns.mac));
+        cJSON_AddStringToObject(no, "mac", mac_str);
+        cJSON_AddNumberToObject(no, "received", ns.received);
+        cJSON_AddNumberToObject(no, "total", ns.total);
+        if (ns.version[0]) {
+            cJSON_AddStringToObject(no, "version", ns.version);
+        }
+        if (ns.error[0]) {
+            cJSON_AddStringToObject(no, "error", ns.error);
+        }
+    }
     cJSON *c = cJSON_AddObjectToObject(o, "cloud");
     cJSON_AddBoolToObject(c, "configured", cs.configured);
     cJSON_AddBoolToObject(c, "connected", cs.connected);
@@ -315,6 +332,18 @@ static const char *op_pair(const cJSON *body)
     return NULL;
 }
 
+/* 节点升级：网关自己下载，进度和结果看 info.node_ota */
+static const char *op_node_ota(const cJSON *body)
+{
+    uint8_t mac[6];
+    if (!parse_mac(cJSON_GetStringValue(cJSON_GetObjectItem(body, "mac")), mac)) {
+        return "bad_mac";
+    }
+    return gw_node_ota_start(mac, cJSON_GetStringValue(cJSON_GetObjectItem(body, "url")),
+                             cJSON_GetStringValue(cJSON_GetObjectItem(body, "sha256")),
+                             cJSON_IsTrue(cJSON_GetObjectItem(body, "force")));
+}
+
 const char *gw_api_exec(const cJSON *cmd)
 {
     const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(cmd, "op"));
@@ -329,6 +358,8 @@ const char *gw_api_exec(const cJSON *cmd)
         return op_pair(cmd);
     } else if (strcmp(op, "get") == 0) {
         return NULL;
+    } else if (strcmp(op, "node_ota") == 0) {
+        return op_node_ota(cmd);
     } else if (strcmp(op, "ota") == 0) {
         /* 远程升级：网关自己下载，结果看 state 里的 ota */
         const cJSON *force = cJSON_GetObjectItem(cmd, "force");
@@ -344,7 +375,7 @@ static const char *http_status(const char *err)
 {
     if (strcmp(err, "no_such_node") == 0) {
         return "404 Not Found";
-    } else if (strcmp(err, "offline") == 0) {
+    } else if (strcmp(err, "offline") == 0 || strcmp(err, "busy") == 0) {
         return "409 Conflict";
     } else if (strcmp(err, "unpair_failed") == 0) {
         return "500 Internal Server Error";
@@ -389,6 +420,11 @@ static esp_err_t set_post(httpd_req_t *req)
 static esp_err_t unpair_post(httpd_req_t *req)
 {
     return op_post(req, op_unpair);
+}
+
+static esp_err_t node_ota_post(httpd_req_t *req)
+{
+    return op_post(req, op_node_ota);
 }
 
 static esp_err_t pair_post(httpd_req_t *req)
@@ -577,6 +613,7 @@ esp_err_t gw_api_register(httpd_handle_t httpd)
         {.uri = "/api/nodes", .method = HTTP_GET, .handler = nodes_get},
         {.uri = "/api/nodes/set", .method = HTTP_POST, .handler = set_post},
         {.uri = "/api/nodes/unpair", .method = HTTP_POST, .handler = unpair_post},
+        {.uri = "/api/nodes/ota", .method = HTTP_POST, .handler = node_ota_post},
         {.uri = "/api/pair", .method = HTTP_POST, .handler = pair_post},
         {.uri = "/api/bind", .method = HTTP_POST, .handler = bind_post},
         {.uri = "/api/bind", .method = HTTP_GET, .handler = bind_get},

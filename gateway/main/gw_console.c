@@ -11,6 +11,7 @@
  *   keys [on|off]              打印按键 ADC 读数
  *   token                      打印 App/OTA 接口用的 API token
  *   ota                        查看 OTA 状态和分区
+ *   nodeota <mac> <url> <sha256> [force]  下载固件并升级节点；不带参数查看状态
  *   exp <pin> <0|1>            设置屏幕 IO 扩展芯片引脚（找背光脚用）
  */
 #include <stdio.h>
@@ -28,6 +29,7 @@
 #include "gw_cloud.h"
 #include "gw_link.h"
 #include "gw_ota.h"
+#include "gw_node_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
 
@@ -230,6 +232,30 @@ static int cmd_ota(int argc, char **argv)
     return 0;
 }
 
+static int cmd_nodeota(int argc, char **argv)
+{
+    if (argc >= 4) {
+        unsigned m[6];
+        uint8_t mac[6];
+        if (sscanf(argv[1], "%2x:%2x:%2x:%2x:%2x:%2x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6) {
+            printf("bad mac\n");
+            return 1;
+        }
+        for (int i = 0; i < 6; i++) {
+            mac[i] = (uint8_t)m[i];
+        }
+        bool force = argc >= 5 && strcmp(argv[4], "force") == 0;
+        const char *err = gw_node_ota_start(mac, argv[2], argv[3], force);
+        printf("%s\n", err ? err : "started");
+        return err ? 1 : 0;
+    }
+    gw_node_ota_status_t st;
+    gw_node_ota_get_status(&st);
+    printf("node ota: %s " MACSTR " v%s %lu/%lu %s\n", gw_node_ota_state_name(st.state), MAC2STR(st.mac),
+           st.version, (unsigned long)st.received, (unsigned long)st.total, st.error);
+    return 0;
+}
+
 static int cmd_exp(int argc, char **argv)
 {
     if (argc != 3) {
@@ -265,6 +291,7 @@ void gw_console_start(void)
         {.command = "token",  .help = "Print API token for app / OTA", .func = cmd_token},
         {.command = "cloud",  .help = "cloud [status|set <host> <port> <user> <pass>|off]", .func = cmd_cloud},
         {.command = "ota",    .help = "ota | ota url <https-url> <sha256> [force], show status or download & upgrade", .func = cmd_ota},
+        {.command = "nodeota", .help = "nodeota | nodeota <mac> <https-url> <sha256> [force]", .func = cmd_nodeota},
         {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {

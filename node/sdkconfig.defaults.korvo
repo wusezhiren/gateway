@@ -1,6 +1,7 @@
 # KS_S3_KORVO_V4 当节点：板上白灯 D4（GP_LED_2，TCA9554 P7，经 Q4 驱动）作一路开关
 # GP_LED_1（P6）只引到排针，没有灯
-# 编译：idf.py -B build_korvo -D SDKCONFIG=build_korvo/sdkconfig \
+# 编译（工程名 esp_s3_korvo，与通用 S3 节点固件区分，升级时不会互相刷错）：
+#   idf.py -B build_korvo -D SDKCONFIG=build_korvo/sdkconfig -D NODE_PROJECT=esp_s3_korvo \
 #         -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.korvo" set-target esp32s3 build
 # GPIO5 是板上 ADC 按键、0/1/2/46 接 LCD，不能用默认的 4,5,6
 CONFIG_NODE_RELAY_GPIOS=""

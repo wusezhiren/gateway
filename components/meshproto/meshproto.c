@@ -26,6 +26,11 @@ static int min_len(int type)
     case MP_HB_ACK:    return sizeof(mp_hb_ack_t);
     case MP_SET:       return sizeof(mp_set_t);
     case MP_LEAVE:     return sizeof(mp_leave_t);
+    case MP_OTA_BEGIN: return sizeof(mp_ota_begin_t);
+    case MP_OTA_DATA:  return MP_OTA_DATA_HDR_LEN + 1;
+    case MP_OTA_ACK:   return sizeof(mp_ota_ack_t);
+    case MP_OTA_END:   return sizeof(mp_ota_end_t);
+    case MP_OTA_ABORT: return sizeof(mp_ota_abort_t);
     default:           return -1;
     }
 }

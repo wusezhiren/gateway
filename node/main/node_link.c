@@ -2,6 +2,7 @@
  * 节点侧 ESP-NOW 链路状态机：
  *   SCAN   逐信道广播 JOIN_REQ，收到发给自己的 JOIN_RSP 后入网（优先尝试上次的信道）
  *   JOINED 周期心跳；连续 MP_HB_MISS_MAX 次没收到 HB_ACK 回到 SCAN
+ * 升级帧交给 node_ota.c 处理。
  * OTA 后首次启动：入网并收到首个 HB_ACK 才确认新固件有效，VALIDATE_TIMEOUT_US 内未完成则回滚。
  * 已绑定网关时只接受该网关的应答，收到 LEAVE 或长按复位键才清除绑定。
  */
@@ -21,6 +22,7 @@
 #include "sdkconfig.h"
 #include "node_io.h"
 #include "node_link.h"
+#include "node_ota.h"
 
 static const char *TAG = "node_link";
 
@@ -214,13 +216,15 @@ static void run_joined(void)
             next_hb += pdMS_TO_TICKS(s_hb_ms);
             continue;
         }
+        node_ota_poll();
         if (xQueueReceive(s_rx_q, &m, next_hb - now) != pdTRUE) {
             continue;
         }
         if (memcmp(m.src, s_gw_mac, 6) != 0) {
             continue;
         }
-        switch (mp_parse(m.data, m.len)) {
+        int type = mp_parse(m.data, m.len);
+        switch (type) {
         case MP_HB_ACK:
             missed = 0;
             if (s_pending_verify) {
@@ -240,6 +244,13 @@ static void run_joined(void)
             send_state(MP_STATE, set->hdr.seq);
             break;
         }
+        case MP_OTA_BEGIN:
+        case MP_OTA_DATA:
+        case MP_OTA_END:
+        case MP_OTA_ABORT:
+            missed = 0;
+            node_ota_handle(type, m.data, m.len, s_gw_mac);
+            break;
         case MP_LEAVE:
             ESP_LOGW(TAG, "unpaired by gateway");
             esp_now_del_peer(s_gw_mac);
@@ -253,11 +264,18 @@ static void run_joined(void)
 
 static void link_task(void *arg)
 {
+#if CONFIG_NODE_TEST_NO_JOIN_AFTER_OTA
+    if (s_pending_verify) {
+        ESP_LOGE(TAG, "NODE_TEST_NO_JOIN_AFTER_OTA: staying silent, should roll back");
+        vTaskDelay(portMAX_DELAY);
+    }
+#endif
     for (;;) {
         ESP_LOGI(TAG, "scanning for gateway%s", s_bound ? "" : " (unbound, gateway must be in pairing mode)");
         scan_until_joined();
         ESP_LOGI(TAG, "joined gateway " MACSTR " on channel %d", MAC2STR(s_gw_mac), s_gw_ch);
         run_joined();
+        node_ota_cancel();
     }
 }
 
@@ -298,7 +316,7 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int le
 
 esp_err_t node_link_start(const mp_ch_desc_t desc[MP_MAX_CH], uint8_t n_ch)
 {
-    s_rx_q = xQueueCreate(8, sizeof(rx_msg_t));
+    s_rx_q = xQueueCreate(16, sizeof(rx_msg_t));   /* 升级时网关一次连发 8 片 */
     if (!s_rx_q) {
         return ESP_ERR_NO_MEM;
     }
@@ -326,7 +344,8 @@ esp_err_t node_link_start(const mp_ch_desc_t desc[MP_MAX_CH], uint8_t n_ch)
              app->project_name, app->version, s_n_ch);
     check_pending_verify();
 
-    if (xTaskCreate(link_task, "node_link", 4096, NULL, 5, NULL) != pdPASS) {
+    /* 升级收尾时 esp_ota_end 要校验签名，4K 栈不够 */
+    if (xTaskCreate(link_task, "node_link", 8192, NULL, 5, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

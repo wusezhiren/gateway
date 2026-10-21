@@ -24,6 +24,7 @@ import com.homenet.espgw.data.GatewayStore
 import com.homenet.espgw.data.GwApi
 import com.homenet.espgw.data.GwInfo
 import com.homenet.espgw.data.Node
+import com.homenet.espgw.data.NodeFirmware
 import com.homenet.espgw.data.gatewayErrorText
 import com.homenet.espgw.data.userMessage
 import kotlinx.coroutines.CancellationException
@@ -55,6 +56,7 @@ enum class Transport { None, Lan, Cloud }
  * 已绑定网关的主界面。
  * 配了云端时优先走云端（网关状态由 MQTT 推送），否则或云端不通时走局域网 HTTP 轮询。
  * 网关固件升级：局域网内直接上传 App 内置固件；只有云端时下发 ota 命令，网关自己从发布仓库下载。
+ * 节点固件升级：下发 node_ota 命令（局域网或云端都行），网关从发布仓库下载后经 ESP-NOW 推给节点。
  */
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val store = GatewayStore(app)
@@ -95,6 +97,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     var latestRelease by mutableStateOf<AppRelease?>(null)
         private set
     private var releaseFetchedAt = 0L
+    private var releaseTriedAt = 0L
     private var otaWatchJob: Job? = null
 
     init {
@@ -249,6 +252,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun tick() {
         val now = System.currentTimeMillis()
+        fetchRelease()
         if (transport != Transport.Lan && cloudUsable()) {
             transport = Transport.Cloud
             linkError = null
@@ -394,7 +398,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun fetchRelease() {
         val now = System.currentTimeMillis()
-        if (now - releaseFetchedAt < 10 * 60_000) return
+        if (now - releaseFetchedAt < 10 * 60_000 || now - releaseTriedAt < 60_000) return
+        releaseTriedAt = now
         viewModelScope.launch {
             runCatching { AppUpdate.fetchLatest() }.onSuccess {
                 latestRelease = it
@@ -431,6 +436,26 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             }
             (ota as? OtaUi.Downloading)?.let { if (!it.started) ota = it.copy(started = true) }
         }
+    }
+
+    // ---------- 节点升级（网关下载固件后经 ESP-NOW 推给节点；局域网、云端都可以） ----------
+
+    /** 发布仓库里适合该节点且比它新的固件，没有返回 null */
+    fun nodeUpgrade(node: Node): NodeFirmware? {
+        val rel = latestRelease ?: return null
+        val fw = rel.nodes.firstOrNull { it.fits(node.project, node.chip) } ?: return null
+        if (fw.url.isBlank() || fw.sha256.length != 64) return null
+        return fw.takeIf { Firmware.compareVersions(it.version, node.version) > 0 }
+    }
+
+    /** 进度和结果由网关在 info.node_ota 里上报（含节点以新版本重新入网的确认） */
+    fun upgradeNode(node: Node) {
+        val fw = nodeUpgrade(node) ?: return
+        action(
+            "node_ota",
+            JSONObject().put("mac", node.mac).put("url", fw.url).put("sha256", fw.sha256),
+            { it.nodeOta(node.mac, fw.url, fw.sha256) },
+        )
     }
 
     /** 根据网关上报的 ota 状态推进升级界面（局域网和云端两条路都会调） */

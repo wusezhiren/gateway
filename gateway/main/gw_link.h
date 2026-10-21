@@ -29,6 +29,7 @@ typedef struct {
     uint16_t     desired[MP_MAX_CH];    /* 期望值，节点重新入网后与实际值不符则补发 */
     uint8_t      desired_mask;          /* desired 中有效的通道位图 */
     bool         resync;                /* 刚入网，等待首个状态上报做比对 */
+    uint32_t     joins;                 /* 本次开机以来的入网次数，升级时据此判断节点已重启 */
 } gw_node_t;
 
 typedef enum {
@@ -47,6 +48,9 @@ void gw_link_set_event_cb(gw_event_cb_t cb);
 
 /* 拷贝整张节点表（GW_MAX_NODES 项），idx 即数组下标，未使用项 used=false */
 void gw_link_snapshot(gw_node_t out[GW_MAX_NODES]);
+
+/* 按 MAC 取一个节点，idx 可为 NULL；没有该节点返回 false */
+bool gw_link_get_node(const uint8_t mac[6], gw_node_t *out, int *idx);
 
 esp_err_t gw_link_set(int idx, uint8_t ch, uint16_t value);
 esp_err_t gw_link_unpair(int idx);

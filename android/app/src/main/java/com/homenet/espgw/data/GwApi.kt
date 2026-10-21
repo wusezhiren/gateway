@@ -100,6 +100,11 @@ class GwApi(
         request("POST", "/api/nodes/unpair", JSONObject().put("mac", mac))
     }
 
+    /** 让网关下载节点固件并升级该节点，进度看 info.node_ota */
+    suspend fun nodeOta(mac: String, url: String, sha256: String) {
+        request("POST", "/api/nodes/ota", JSONObject().put("mac", mac).put("url", url).put("sha256", sha256))
+    }
+
     suspend fun pair(seconds: Int) {
         request("POST", "/api/pair", JSONObject().put("seconds", seconds))
     }
@@ -175,15 +180,15 @@ class GwApi(
     }
 }
 
-/** 错误码转成给用户看的文字 */
 /** 网关错误码（HTTP 和云端共用，含固件升级的失败原因） */
 fun gatewayErrorText(error: String): String = when (error) {
     "unauthorized" -> "网关拒绝访问（token 无效，请重新绑定）"
     "offline" -> "节点离线"
     "no_such_node" -> "节点不存在"
     "busy" -> "网关忙，请稍后重试"
-    "not_newer" -> "版本不高于网关当前版本"
-    "wrong_project" -> "不是网关固件"
+    "not_newer" -> "版本不高于当前版本"
+    "wrong_project" -> "固件类型不对"
+    "wrong_chip" -> "固件芯片型号不对"
     "not_an_app_image" -> "不是 ESP 固件文件"
     "invalid_image_or_signature" -> "固件损坏或签名不对"
     "too_large" -> "固件太大"
@@ -196,6 +201,16 @@ fun gatewayErrorText(error: String): String = when (error) {
     "sha256_mismatch" -> "网关下载的固件校验不对"
     "bad_url", "bad_sha256" -> "固件下载信息有误"
     "no_mem" -> "网关内存不足"
+    "node_no_response" -> "节点没有响应（节点固件太旧不支持远程升级时，需先用 USB 烧录一次）"
+    "node_no_session" -> "节点中途重启，这次升级已取消（节点仍运行旧固件）"
+    "node_timeout" -> "给节点传固件中断（节点信号太弱或掉线）"
+    "node_begin_failed" -> "节点无法开始升级（上次升级还没确认，稍后再试）"
+    "node_write_failed" -> "节点写 flash 失败"
+    "node_sha256_mismatch", "node_incomplete" -> "节点收到的固件不完整"
+    "node_too_large" -> "固件超出节点分区大小"
+    "rolled_back" -> "新固件启动后没连上网关，节点已自动回滚到旧版本"
+    "no_rejoin" -> "节点升级后没有回来，请检查节点"
+    "no_image" -> "网关没有可用的节点固件"
     else -> "网关错误：$error"
 }
 

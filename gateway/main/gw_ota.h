@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "esp_http_client.h"
 #include "esp_http_server.h"
 
 /*
@@ -42,6 +43,10 @@ void gw_ota_get_status(gw_ota_status_t *st);
  */
 const char *gw_ota_start_url(const char *url, const char *sha256_hex, const char *version, bool force);
 const char *gw_ota_state_name(gw_ota_state_t s);
+
+/* 下载辅助（节点升级共用）：打开并跟随跳转，成功返回 NULL；读满 len 字节或到结尾，出错返回 -1 */
+const char *gw_ota_http_open(esp_http_client_handle_t c, int64_t *len);
+int gw_ota_http_read(esp_http_client_handle_t c, char *buf, int len);
 
 /* 比较 "x.y.z" 版本号，返回 <0 / 0 / >0 */
 int gw_ota_version_cmp(const char *a, const char *b);

@@ -41,6 +41,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.homenet.espgw.data.Channel
 import com.homenet.espgw.data.Node
+import com.homenet.espgw.data.NodeFirmware
+import com.homenet.espgw.data.NodeOtaStatus
+import com.homenet.espgw.data.gatewayErrorText
 import com.homenet.espgw.ui.theme.OkGreen
 import com.homenet.espgw.ui.theme.WarnOrange
 
@@ -63,8 +66,17 @@ fun NodesTab(vm: HomeViewModel) {
                 )
             }
         }
+        val nodeOta = vm.info?.nodeOta
         items(vm.nodes, key = { it.mac }) { node ->
-            NodeCard(node, onOpen = { detail = node.mac }, onSet = { ch, v -> vm.setChannel(node, ch, v) })
+            NodeCard(
+                node,
+                upgrade = vm.nodeUpgrade(node),
+                ota = nodeOta?.takeIf { it.mac.equals(node.mac, ignoreCase = true) && it.state != "idle" },
+                otaBusy = nodeOta?.active == true,
+                onUpgrade = { vm.upgradeNode(node) },
+                onOpen = { detail = node.mac },
+                onSet = { ch, v -> vm.setChannel(node, ch, v) },
+            )
         }
     }
 
@@ -113,7 +125,16 @@ private fun StatusDot(online: Boolean) {
 }
 
 @Composable
-private fun NodeCard(node: Node, onOpen: () -> Unit, onSet: (Int, Int) -> Unit) {
+private fun NodeCard(
+    node: Node,
+    upgrade: NodeFirmware?,
+    ota: NodeOtaStatus?,
+    otaBusy: Boolean,
+    onUpgrade: () -> Unit,
+    onOpen: () -> Unit,
+    onSet: (Int, Int) -> Unit,
+) {
+    var confirm by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth().clickable(onClick = onOpen), verticalAlignment = Alignment.CenterVertically) {
@@ -130,11 +151,52 @@ private fun NodeCard(node: Node, onOpen: () -> Unit, onSet: (Int, Int) -> Unit) 
                 }
                 TextButton(onClick = onOpen) { Text("详情") }
             }
+            if (ota != null && (ota.state != "done" || upgrade == null)) {
+                NodeOtaLine(ota)
+            } else if (upgrade != null) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "有新固件 v${upgrade.version}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { confirm = true }, enabled = node.online && !otaBusy) { Text("升级") }
+                }
+            }
             node.ch.forEachIndexed { i, ch ->
                 ChannelControl(i, ch, node.online) { onSet(i, it) }
             }
         }
     }
+    if (confirm && upgrade != null) {
+        ConfirmDialog(
+            title = "升级节点",
+            text = "把 ${node.title} 从 v${node.version} 升级到 v${upgrade.version}。" +
+                "网关下载固件后传给节点，约 1 分钟，期间开关照常可用，最后节点会重启几秒。" +
+                "新固件连不上网关会自动回滚到旧版本。",
+            confirm = "升级",
+            onConfirm = {
+                confirm = false
+                onUpgrade()
+            },
+            onDismiss = { confirm = false },
+        )
+    }
+}
+
+@Composable
+private fun NodeOtaLine(ota: NodeOtaStatus) {
+    val pct = if (ota.total > 0) " ${ota.received * 100 / ota.total}%" else ""
+    val (text, color) = when (ota.state) {
+        "downloading" -> "网关下载固件$pct" to MaterialTheme.colorScheme.primary
+        "sending" -> "正在传给节点$pct" to MaterialTheme.colorScheme.primary
+        "rebooting" -> "节点校验通过，重启中…" to MaterialTheme.colorScheme.primary
+        "done" -> "已升级到 v${ota.version}" to OkGreen
+        "failed" -> "升级失败：${gatewayErrorText(ota.error)}" to MaterialTheme.colorScheme.error
+        else -> return
+    }
+    Text(text, style = MaterialTheme.typography.bodySmall, color = color, modifier = Modifier.padding(top = 4.dp))
 }
 
 @Composable

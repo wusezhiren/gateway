@@ -44,14 +44,20 @@ idf.py build
 idf.py -p /dev/ttyACM1 flash monitor   # Korvo 原生 USB 口（303a:1001），以 ls /dev/serial/by-id 为准
 ```
 
-节点（按芯片选择构建目录）：
+节点（按芯片 / 板子选择构建目录）：
 
 ```bash
 cd node
 idf.py -B build_c3 -DIDF_TARGET=esp32c3 -DSDKCONFIG=build_c3/sdkconfig build
 idf.py -B build_c3 -DIDF_TARGET=esp32c3 -DSDKCONFIG=build_c3/sdkconfig -p /dev/ttyACM1 flash monitor
-# ESP32-S3 节点把 c3 换成 s3
+# ESP32-S3 核心板把 c3 换成 s3
+# Korvo 板当节点（工程名 esp_s3_korvo，见 sdkconfig.defaults.korvo）：
+idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_korvo \
+       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.korvo" set-target esp32s3 build
 ```
+
+工程名区分固件种类，节点只接受同名固件的升级：硬件配置不同的板子要用不同的 `NODE_PROJECT`（不超过 16 个字符），
+并加到 `tools/release_app.py` 的 `NODE_BUILDS`。0.3.0 以前的节点不支持远程升级，需先 USB 烧一次。
 
 节点 GPIO 在 `idf.py menuconfig` → Node 中配置（默认继电器 GPIO4、5，PWM GPIO6）。
 ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
@@ -67,6 +73,8 @@ ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
 | `wifi [status]` / `wifi set <ssid> [pass]` / `wifi clear` | 路由器配置 |
 | `prov [start\|stop\|status]` | 配网模式（热点 `ESP-GW-XXXX` / `a12345678`） |
 | `keys [on\|off]` | 打印按键 ADC 读数 |
+| `ota` / `ota url <url> <sha256> [force]` | 网关升级状态 / 从网上下载升级 |
+| `nodeota` / `nodeota <mac> <url> <sha256> [force]` | 节点升级状态 / 下载固件升级节点 |
 
 ## 网关 OTA
 
@@ -80,6 +88,13 @@ tools/ota_upload.py 192.168.x.x gateway/build/esp_s3_gateway.bin --token <token>
 - 新固件确认前崩溃会自动回滚；回滚测试固件可用
   `CONFIG_GW_TEST_ABORT_BEFORE_VALIDATE=y` 单独构建（**不要发布**）
 - 接口见 [docs/api.md](docs/api.md)
+
+## 节点 OTA
+
+- App 节点卡片出现“有新固件 vX”时点“升级”，局域网和 4G 都可以；网关从发布仓库下载后经 ESP-NOW 推给节点
+- 调试时也可以局域网直接上传：`curl -H "Authorization: Bearer <token>" --data-binary @<bin> "http://<网关IP>/api/ota/node?mac=<节点MAC>"`
+- 新固件 60 秒内连不上网关会自动回滚；回滚测试固件用 `CONFIG_NODE_TEST_NO_JOIN_AFTER_OTA=y` 单独构建（**不要发布**）
+- 协议和防变砖措施见 [docs/protocol.md](docs/protocol.md#节点升级)
 
 ## 配网
 
@@ -98,8 +113,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 - 新网关：App 内连接热点配网，成功后自动保存地址和 token
 - 已联网网关：App 通过 mDNS 查找（或手动输入 IP），在网关屏幕上点“允许”完成绑定
-- 发版：`tools/release_app.py <版本> --notes "说明"`，自动编译网关固件并内置进 App、用发布签名打包、
-  上传到公开发布仓库 https://gitee.com/yu_ji_hai/app_release ，并通过云端通知在线的 App；
-  App 启动时检查 `version.json` 自动更新，固件页提示“升级到 vX”把内置固件推给网关。
+- 发版：`tools/release_app.py <版本> --notes "说明"`，自动编译网关固件并内置进 App、编译各种节点固件、
+  用发布签名打包、上传到公开发布仓库 https://gitee.com/yu_ji_hai/app_release ，并通过云端通知在线的 App；
+  App 启动时检查 `version.json` 自动更新，固件页提示“升级到 vX”把内置固件推给网关（不在局域网时让网关自己下载），
+  节点卡片提示“有新固件”让网关下载并升级节点。
   凭据在 `local/`（不上传）：`gitee_token`、`keystore.properties`/`release.keystore`（**务必备份**）、`cloud.json`
 - 外网访问：网关和 App 都连云端 MQTT（EMQX Cloud），在 App「网关 → 云端设置」填写，见 [docs/cloud.md](docs/cloud.md)

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """发布 App（内置网关固件）到 gitee 发布仓库，并通过云端通知在线的 App。
 
-  tools/release_app.py 0.2.0 --notes "更新说明" [--gw-version 0.4.1] [--skip-gateway] [--dry-run]
+  tools/release_app.py 0.2.0 --notes "更新说明" [--gw-version 0.4.1] [--skip-gateway] [--skip-nodes] [--dry-run]
 
 步骤：
-  1. 编译网关固件（签名），版本 --gw-version（默认取 gateway/CMakeLists.txt）
+  1. 编译网关固件（签名），版本 --gw-version（默认取 gateway/CMakeLists.txt）；
+     编译各种节点固件（NODE_BUILDS），版本取 node/CMakeLists.txt
   2. 打 App release 包（发布签名，内置网关固件），版本号即参数
-  3. 在 gitee 发布仓库建 Release vX.Y.Z，上传 APK 和网关固件，更新 version.json
+  3. 在 gitee 发布仓库建 Release vX.Y.Z，上传 APK、网关固件和节点固件，更新 version.json
   4. 往云端 espgw/app/latest 发布保留消息（需要 pip install paho-mqtt）
 
 本地凭据（local/，不上传）：
@@ -35,6 +36,14 @@ LOCAL = ROOT / 'local'
 OWNER, REPO = 'yu_ji_hai', 'app_release'
 API = f'https://gitee.com/api/v5/repos/{OWNER}/{REPO}'
 GW_BIN = ROOT / 'gateway' / 'build' / 'esp_s3_gateway.bin'
+# 节点固件种类：(编译目录, 额外 idf.py 参数)；工程名和芯片从生成的镜像里读
+NODE_BUILDS = [
+    ('build_c3', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3/sdkconfig']),
+    ('build_s3', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_s3/sdkconfig']),
+    ('build_korvo', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_korvo/sdkconfig', '-DNODE_PROJECT=esp_s3_korvo',
+                     '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.korvo']),
+]
+CHIPS = {5: 'esp32c3', 9: 'esp32s3', 13: 'esp32c6'}
 APK = ROOT / 'android' / 'app' / 'build' / 'outputs' / 'apk' / 'release' / 'app-release.apk'
 
 
@@ -50,11 +59,39 @@ def run(cmd, cwd=None, env=None):
 
 def fw_version(path):
     """读固件 esp_app_desc_t：返回 (project, version)"""
+    return fw_info(path)[:2]
+
+
+def fw_info(path):
+    """读固件镜像头和 esp_app_desc_t：返回 (project, version, chip)"""
     head = path.read_bytes()[:256]
     if head[0] != 0xE9 or struct.unpack_from('<I', head, 32)[0] != 0xABCD5432:
         die(f'{path} 不是 ESP app 镜像')
     s = lambda off: head[off:off + 32].split(b'\0')[0].decode()
-    return s(32 + 48), s(32 + 16)
+    chip = CHIPS.get(struct.unpack_from('<H', head, 12)[0], 'unknown')
+    return s(32 + 48), s(32 + 16), chip
+
+
+def build_nodes():
+    """编译所有节点固件，返回 [(path, project, version, chip)]"""
+    ver = re.search(r'set\(PROJECT_VER "([^"]+)"\)', (ROOT / 'node' / 'CMakeLists.txt').read_text()).group(1)
+    idf = os.environ.get('IDF_PATH', str(pathlib.Path.home() / 'esp' / 'esp-idf'))
+    out = []
+    for bdir, args in NODE_BUILDS:
+        quoted = ' '.join(f"'{a}'" for a in args)
+        run(f'. "{idf}/export.sh" >/dev/null && idf.py -B {bdir} {quoted} -DPROJECT_VER={ver} build',
+            cwd=ROOT / 'node')
+        bins = [p for p in (ROOT / 'node' / bdir).glob('*.bin')
+                if not p.name.endswith('-unsigned.bin') and p.name not in ('bootloader.bin', 'ota_data_initial.bin')
+                and p.read_bytes()[:1] == b'\xe9']
+        if len(bins) != 1:
+            die(f'node/{bdir} 里找不到唯一的固件：{[p.name for p in bins]}')
+        project, v, chip = fw_info(bins[0])
+        if v != ver:
+            die(f'{bins[0]} 版本是 {v}，应为 {ver}')
+        print(f'节点固件 {project} {chip} v{v}')
+        out.append((bins[0], project, v, chip))
+    return out
 
 
 def version_code(v):
@@ -122,6 +159,7 @@ def main():
     ap.add_argument('--notes', default='', help='更新说明')
     ap.add_argument('--gw-version', help='网关固件版本，默认取 gateway/CMakeLists.txt')
     ap.add_argument('--skip-gateway', action='store_true', help='不重新编译网关，直接用 gateway/build 里的固件')
+    ap.add_argument('--skip-nodes', action='store_true', help='不发布节点固件')
     ap.add_argument('--dry-run', action='store_true', help='只编译，不上传、不通知')
     ap.add_argument('--copy-to', help='另外拷贝 APK 到这个目录')
     a = ap.parse_args()
@@ -145,6 +183,7 @@ def main():
     if project != 'esp_s3_gateway':
         die(f'固件工程名是 {project}')
     print(f'网关固件 {project} v{gw_ver}')
+    nodes = [] if a.skip_nodes else build_nodes()
 
     # 2. App
     env = dict(os.environ)
@@ -175,7 +214,20 @@ def main():
         'gatewayUrl': f'https://gitee.com/{OWNER}/{REPO}/releases/download/{tag}/{gw_name}',
         'gatewaySha256': hashlib.sha256(gw_data).hexdigest(),
         'gatewaySize': len(gw_data),
+        'nodes': [],
     }
+    node_files = []
+    for path, project, ver, chip in nodes:
+        name_n = f'{project}-{chip}-{ver}.bin'
+        dst = out.parent / name_n
+        shutil.copy(path, dst)
+        data_n = dst.read_bytes()
+        node_files.append(dst)
+        manifest['nodes'].append({
+            'project': project, 'chip': chip, 'version': ver,
+            'url': f'https://gitee.com/{OWNER}/{REPO}/releases/download/{tag}/{name_n}',
+            'sha256': hashlib.sha256(data_n).hexdigest(), 'size': len(data_n),
+        })
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
     if a.copy_to:
         shutil.copy(out, pathlib.Path(a.copy_to) / name)
@@ -185,7 +237,8 @@ def main():
 
     # 3. gitee：Release + APK，再更新 version.json（App 以它为准，最后更新）
     rel = gitee('POST', '/releases', {'tag_name': tag, 'name': tag, 'target_commitish': 'master',
-                                      'body': (a.notes or tag) + f'\n\n内置网关固件 v{gw_ver}'})
+                                      'body': (a.notes or tag) + f'\n\n内置网关固件 v{gw_ver}' +
+                                      ''.join(f'\n节点固件 {p} {c} v{v}' for _, p, v, c in nodes)})
     att = gitee('POST', f'/releases/{rel["id"]}/attach_files', files={'file': out})
     if att.get('browser_download_url'):
         manifest['url'] = att['browser_download_url']
@@ -194,6 +247,11 @@ def main():
     if att.get('browser_download_url'):
         manifest['gatewayUrl'] = att['browser_download_url']
     print('已上传', manifest['gatewayUrl'])
+    for dst, entry in zip(node_files, manifest['nodes']):
+        att = gitee('POST', f'/releases/{rel["id"]}/attach_files', files={'file': dst})
+        if att.get('browser_download_url'):
+            entry['url'] = att['browser_download_url']
+        print('已上传', entry['url'])
     old = gitee('GET', '/contents/version.json')
     content = __import__('base64').b64encode(
         (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode()).decode()

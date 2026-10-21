@@ -18,6 +18,7 @@
 #include "gw_keys.h"
 #include "gw_link.h"
 #include "gw_ota.h"
+#include "gw_node_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
 #include "ui.h"
@@ -62,6 +63,13 @@ static void on_prov(const gw_prov_status_t *st)
 static void on_ota(const gw_ota_status_t *st)
 {
     ESP_LOGI(TAG, "ota %s v%s %lu/%lu %s", gw_ota_state_name(st->state), st->version,
+             (unsigned long)st->received, (unsigned long)st->total, st->error);
+    gw_cloud_notify();
+}
+
+static void on_node_ota(const gw_node_ota_status_t *st)
+{
+    ESP_LOGI(TAG, "node ota %s v%s %lu/%lu %s", gw_node_ota_state_name(st->state), st->version,
              (unsigned long)st->received, (unsigned long)st->total, st->error);
     gw_cloud_notify();
 }
@@ -158,6 +166,7 @@ void app_main(void)
     ESP_ERROR_CHECK(gw_cloud_init());
     ESP_ERROR_CHECK(gw_http_start());
     gw_ota_set_cb(on_ota);
+    gw_node_ota_set_cb(on_node_ota);
     ESP_ERROR_CHECK(gw_prov_init(on_prov));
     /* 屏幕失败不影响组网功能 */
     if (gw_display_init() == ESP_OK) {

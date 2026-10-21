@@ -19,10 +19,14 @@ token 为 32 位十六进制，配网成功时由 `/api/prov/status` 返回，�
  "wifi": {"ssid": "...", "connected": true, "ip": "192.168.32.222", "rssi": -26, "channel": 11},
  "nodes": {"total": 0, "online": 0, "pair_left": 0},
  "ota": {"state": "idle", "received": 0, "total": 0},
+ "node_ota": {"state": "sending", "mac": "98:88:e0:14:75:e0", "received": 400000, "total": 856064, "version": "0.3.0"},
  "cloud": {"configured": true, "connected": true, "id": "44bd8df31b70"}}
 ```
 
 `ota.state`：`idle` / `receiving` / `rebooting` / `failed`（附 `error`），`version` 为目标版本。
+
+`node_ota`：最近一次节点升级。`state` = `idle` / `downloading`（下载或上传到网关）/ `sending`（传给节点）/
+`rebooting`（节点校验通过已重启，等它回来）/ `done` / `failed`（附 `error`）；`received` / `total` 是当前阶段的进度。
 
 ## 发现
 
@@ -86,6 +90,19 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 
 `{"seconds": 60}` 打开配对窗口（0~300，0 立即关闭）。剩余秒数见 `/api/nodes` 的 `pair_left` 或 `/api/info` 的 `nodes.pair_left`。
 
+### `POST /api/nodes/ota`
+
+`{"mac": "...", "url": "https://...", "sha256": "<64 位十六进制>", "force": false}` → `{"ok": true}`
+
+网关从 `url` 下载节点固件（跟随跳转，证书用 IDF 证书包校验）暂存到 `node_fw` 分区，核对后推给节点，
+进度看 `/api/info` 的 `node_ota`。与云端 `node_ota` 命令相同，错误码见 [cloud.md](cloud.md)。
+
+| 状态码 | error |
+|---|---|
+| 400 | `bad_mac` / `bad_url`（非 https）/ `bad_sha256` |
+| 404 | `no_such_node` |
+| 409 | `offline` / `busy`（已有节点或网关升级在进行） |
+
 ## 云端配置（需鉴权）
 
 协议见 [cloud.md](cloud.md)。
@@ -138,6 +155,25 @@ tools/ota_upload.py <网关IP> gateway/build/esp_s3_gateway.bin --token <token> 
 ```
 
 升级过程中可轮询 `/api/info` 的 `ota` 字段查看进度。
+
+## 节点 OTA
+
+### `POST /api/ota/node?mac=aa:bb:cc:dd:ee:ff[&force=1]`（需鉴权）
+
+请求体为签名后的节点固件（开发调试用；正式升级用 `POST /api/nodes/ota` 让网关自己下载）。
+网关读到镜像头就核对：芯片型号、工程名与该节点一致，版本更新（`force=1` 例外），不合格不写 flash；
+收完存入 `node_fw` 分区后立即回复 `{"ok": true}`，后台推给节点，结果看 `/api/info` 的 `node_ota`。
+
+| 状态码 | error |
+|---|---|
+| 400 | `bad_mac` / `not_an_app_image` / `wrong_chip` / `wrong_project` / `too_small` / `too_large` / `recv_failed` |
+| 404 | `no_such_node` |
+| 409 | `offline` / `busy` / `not_newer` |
+
+```bash
+curl -H "Authorization: Bearer <token>" --data-binary @node/build_korvo/esp_s3_korvo.bin \
+     "http://<网关IP>/api/ota/node?mac=98:88:e0:14:75:e0"
+```
 
 ## 配网接口（阶段 2）
 

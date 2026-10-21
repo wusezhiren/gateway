@@ -14,6 +14,19 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
+/** 同一次发布的节点固件，按工程名 + 芯片区分（不同硬件配置的板子工程名不同） */
+data class NodeFirmware(
+    val project: String,
+    val chip: String,
+    val version: String,
+    val url: String,
+    val sha256: String,
+) {
+    /** 节点上报的工程名在协议里截断为 16 个字符 */
+    fun fits(projectOfNode: String, chipOfNode: String) =
+        chip == chipOfNode && project.take(16) == projectOfNode
+}
+
 /** 发布仓库里 version.json 描述的最新版本 */
 data class AppRelease(
     val versionCode: Int,
@@ -26,6 +39,7 @@ data class AppRelease(
     /** 同一次发布的网关固件，远程升级时网关自己下载 */
     val gatewayUrl: String,
     val gatewaySha256: String,
+    val nodes: List<NodeFirmware>,
 ) {
     companion object {
         fun parse(o: JSONObject) = AppRelease(
@@ -38,6 +52,18 @@ data class AppRelease(
             gatewayVersion = o.optString("gatewayVersion"),
             gatewayUrl = o.optString("gatewayUrl"),
             gatewaySha256 = o.optString("gatewaySha256").lowercase(),
+            nodes = o.optJSONArray("nodes")?.let { arr ->
+                (0 until arr.length()).map { i ->
+                    val n = arr.getJSONObject(i)
+                    NodeFirmware(
+                        project = n.optString("project"),
+                        chip = n.optString("chip"),
+                        version = n.optString("version"),
+                        url = n.optString("url"),
+                        sha256 = n.optString("sha256").lowercase(),
+                    )
+                }
+            }.orEmpty(),
         )
     }
 }

@@ -5,6 +5,7 @@
 #include "gw_api.h"
 #include "gw_http.h"
 #include "gw_ota.h"
+#include "gw_node_ota.h"
 
 static const char *TAG = "gw_http";
 
@@ -65,6 +66,9 @@ esp_err_t gw_http_start(void)
     esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
     esp_log_level_set("httpd_parse", ESP_LOG_ERROR);
     err = gw_ota_register(s_httpd);
+    if (err == ESP_OK) {
+        err = gw_node_ota_register(s_httpd);
+    }
     if (err == ESP_OK) {
         err = gw_api_register(s_httpd);
     }

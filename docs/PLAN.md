@@ -178,25 +178,27 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 
 ### 3b 节点升级（ESP-NOW 分片）
 
-- `POST /api/ota/node?target=esp32c3|esp32s3`：存入 `node_fw` 对应槽
-  - 网关预检：镜像头芯片型号、工程名、版本、签名块存在，元数据（版本、大小、SHA256）记入 NVS
-- 发起方式：App / API（`POST /api/ota/node/start`）或**网关屏幕**（单个节点或全部同型号节点），网关逐个升级
-- 新增协议消息（从第一版起保持兼容，这是今后唯一的升级通道）：
+协议、流程和防变砖措施见 [protocol.md](protocol.md#节点升级)，命令见 [cloud.md](cloud.md) 和 [api.md](api.md)。
 
-| 消息 | 方向 | 内容 |
-|---|---|---|
-| `OTA_BEGIN` | 网关 → 节点 | 大小、SHA256、版本、芯片型号、工程名、分片大小 |
-| `OTA_DATA` | 网关 → 节点 | offset + 数据 |
-| `OTA_ACK` | 节点 → 网关 | 累计确认 offset / 错误码 |
-| `OTA_END` | 网关 → 节点 | 结束，节点校验后重启 |
-| `OTA_ABORT` | 网关 → 节点 | 取消 |
-
-- 传输：滑动窗口（8 片）+ 累计 ACK，超时从已确认 offset 续传；分片 200B 兼容 ESP-NOW v1，
-  两端支持 v2 时可增大分片（最大 1470B）提速
-- 升级期间正常处理 SET 和心跳，不影响控制
-- 节点侧：`esp_ota_begin/write/end` 校验 SHA256 与签名，切换启动分区，重启
-- 结果判定：节点以新版本重新入网 = 成功；超时未回来 = 失败（节点自行回滚）
-- 拒绝降级（除非显式 `force`），拒绝芯片型号或工程名不符的镜像
+- [x] 协议：OTA_BEGIN / DATA / ACK / END / ABORT（类型 8~12，`MP_VERSION` 不变，老固件丢弃）；
+  每片 200 字节，8 片一批、最后一片要 ACK，超时从已确认 offset 续传
+- [x] 节点（0.3.0）：`node_ota.c`，只写空闲分区；END 时 SHA-256 + 签名 + 工程名 + 版本全部通过才切换；
+  新固件 60 秒内连不上网关自动回滚；`node_link` 任务栈 8K（`esp_ota_end` 校验签名 4K 不够）
+- [x] 网关（0.5.0）：`gw_node_ota.c`，固件暂存 `node_fw` 分区（整个分区一个槽，内存里记 SHA-256，同一份不重复下载），
+  核对镜像头（芯片、工程名、版本）后推送，等节点带新版本重新入网；一次一个节点，不和网关升级并行
+- [x] 来源：云端 / HTTP `node_ota` 命令（网关自己 HTTPS 下载）、`POST /api/ota/node` 局域网上传（调试）、串口 `nodeota`
+- [x] 固件种类按**工程名 + 芯片**区分：通用核心板 `esp_s3_node`（C3 / S3），Korvo 板 `esp_s3_korvo`（`-DNODE_PROJECT`）
+- [x] 发版脚本编译三种节点固件一起发布，`version.json` 增加 `nodes`；App 节点卡片提示“有新固件”，确认后升级并显示进度
+- [x] 实测（Korvo 节点，网关 0.5.0）：
+  - 局域网上传 0.2.0 → 0.2.1：上传 10 秒、传给节点 26 秒（856KB，约 33KB/s），节点重启 0.1 秒内确认
+  - 首次测试时节点在 `esp_ota_end` 栈溢出重启——尚未切换分区，节点仍是旧版本，网关报 `node_no_session`；栈加大后正常
+  - 拒绝：别的工程名 `wrong_project`、别的芯片 `wrong_chip`、非固件 `not_an_app_image`、同版本 `not_newer`，均在读镜像头时拒绝
+  - 传输中控制开关正常；传到 24% 时复位节点，升级作废、节点仍是旧版本在线
+  - **回滚**：推送“升级后不联系网关”的测试固件 0.2.3，60 秒后节点自动回到 0.2.2，网关报 `rolled_back`
+  - 云端 `node_ota`（App 0.2.6 发布的 gitee 附件）：SHA-256 错下载后拒绝；正常升级下载 15 秒 + 传输 30 秒到 0.3.0
+  - `force=1` 降级 0.3.0 → 0.2.2 正常
+- [ ] 网关屏幕上的“升级固件”/“全部升级”（需要网关自己读 `version.json`）
+- [ ] 一次升级多个节点（App 逐个发起即可，暂不做队列）
 
 ### 签名密钥管理
 
@@ -244,7 +246,7 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [x] 无操作熄屏（默认 60 秒，可设置并存 NVS），触摸或按键唤醒且唤醒触摸不触发控件
 - [x] 实测（Korvo）：方向、颜色、中文、滑动翻页、触摸位置、熄屏均正常
 - [ ] 背光引脚未确认（`CONFIG_GW_LCD_BL_EXP_PIN`，目前熄屏只关面板显示）
-- [ ] 节点“升级固件”/“全部升级”按钮待阶段 3b 接通
+- [ ] 节点“升级固件”/“全部升级”按钮（阶段 3b 只接通了 App，屏幕待做）
 
 ## 阶段 5：网关 App API
 
@@ -254,7 +256,7 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [x] 网关版本 0.3.0，经局域网 OTA 部署到 Korvo；curl 验证鉴权、配对、错误码
 - [x] mDNS 实测：树莓派解析 `esp-gw.local` 正常，手机 App 查找并绑定成功
 - [ ] WebSocket 状态推送（目前 App 2 秒轮询，局域网够用）
-- [ ] 节点 OTA 接口（随阶段 3b）
+- [x] 节点 OTA 接口：`POST /api/nodes/ota`（网关下载）、`POST /api/ota/node`（上传），进度在 `/api/info` 的 `node_ota`
 
 ## 阶段 6：Android App
 
@@ -268,7 +270,7 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [x] 连续失败时按 MAC 用 mDNS 重新查找网关 IP
 - [x] 手机实测：查找并绑定（屏幕确认）、云端设置下发（Redmi K50 Pro，Android 14）
 - [ ] 手机实测：App 内配网、节点控制（待节点）、网关 OTA
-- [ ] 节点固件升级（随阶段 3b）
+- [x] 节点固件升级：节点卡片“有新固件 vX → 升级”，局域网和云端都可以，显示下载 / 传输 / 重启进度（App 0.2.6）
 
 ## 外网访问（云端 MQTT）
 
@@ -289,7 +291,9 @@ docs/                   计划、ESP-NOW 协议、App API 文档
 - [x] App 自更新：读公开仓库 `version.json`，下载后校验 SHA-256，调起系统安装；云端 `espgw/app/latest` 通知
 - [x] 发版脚本 `tools/release_app.py`（release 包 3.8MB，含 2MB 网关固件）
 - [x] 首次正式发布 v0.2.0（内置网关 v0.4.1）：匿名读 version.json、下载 APK（跳转 2 次到 foruda.gitee.com）均正常，SHA-256 一致
-- [ ] 外网通过 MQTT 分片升级网关
+- [x] 外网升级网关：改为云端下发地址、网关自己 HTTPS 下载（v0.2.5 / 网关 0.4.6 起，见阶段 3a）
+- [x] 发布带节点固件：v0.2.6（网关 0.5.0，节点 `esp_s3_node` C3 / S3 和 `esp_s3_korvo` 0.3.0）。
+  注意 gitee 的 raw 地址现在会跳转到 `raw.giteeusercontent.com`，命令行取 `version.json` 要 `curl -L`
 - [ ] ESP-NOW 密钥改为每个节点配对时随机生成（固件公开后编译期默认密钥可被提取）
 
 ## 阶段 7：业务扩展

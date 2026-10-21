@@ -36,6 +36,29 @@ data class OtaStatus(
     val rolledBack: String = "",
 )
 
+/** 网关正在/最近一次给节点升级的状态（info.node_ota） */
+data class NodeOtaStatus(
+    val state: String,      // idle / downloading / sending / rebooting / done / failed
+    val mac: String,
+    val received: Long,
+    val total: Long,
+    val version: String,
+    val error: String,
+) {
+    val active: Boolean get() = state == "downloading" || state == "sending" || state == "rebooting"
+
+    companion object {
+        fun parse(o: JSONObject?) = NodeOtaStatus(
+            state = o?.optString("state", "idle") ?: "idle",
+            mac = o?.optString("mac").orEmpty(),
+            received = o?.optLong("received") ?: 0,
+            total = o?.optLong("total") ?: 0,
+            version = o?.optString("version").orEmpty(),
+            error = o?.optString("error").orEmpty(),
+        )
+    }
+}
+
 /** GET /api/info */
 data class GwInfo(
     val project: String,
@@ -53,6 +76,7 @@ data class GwInfo(
     val nodesOnline: Int,
     val pairLeft: Int,
     val ota: OtaStatus,
+    val nodeOta: NodeOtaStatus,
     val cloudConfigured: Boolean,
     val cloudConnected: Boolean,
 ) {
@@ -85,6 +109,7 @@ data class GwInfo(
                     error = ota.optString("error"),
                     rolledBack = ota.optString("rolled_back"),
                 ),
+                nodeOta = NodeOtaStatus.parse(o.optJSONObject("node_ota")),
                 cloudConfigured = cloud.optBoolean("configured"),
                 cloudConnected = cloud.optBoolean("connected"),
             )

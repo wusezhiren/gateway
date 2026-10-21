@@ -52,6 +52,7 @@ App 在任何网络下都能控制网关，不需要端口映射或 VPN。
 | `pair` | `seconds`（0~300） | `POST /api/pair` |
 | `get` | — | 只触发一次 `state` 发布 |
 | `ota` | `url`（https）、`sha256`（64 位十六进制）、`version`（可选，仅显示）、`force`（可选） | 无（远程升级专用，见下） |
+| `node_ota` | `mac`、`url`（https）、`sha256`、`force`（可选） | `POST /api/nodes/ota` |
 
 回复：`{"id": "a1b2c3", "ok": true}` 或 `{"id": "a1b2c3", "ok": false, "error": "offline"}`，错误码与 HTTP 接口相同，
 另有 `unauthorized`（token 不对）、`bad_op`。执行后网关会发布新的 `state`。
@@ -75,9 +76,31 @@ App 在任何网络下都能控制网关，不需要端口映射或 VPN。
    确认前崩溃或看门狗复位，bootloader 也会回滚。回滚后 `info.ota.rolled_back` 给出被回滚的版本
 4. App 只在 `gatewayVersion` 高于网关当前版本时提供远程升级，不做降级
 
+## 升级节点（node_ota）
+
+App 从 `version.json` 的 `nodes` 里按**工程名 + 芯片**找到适合该节点的固件，版本更高时提供“升级”，发 `node_ota` 命令
+（局域网时走 `POST /api/nodes/ota`，效果相同）。网关自己下载到 `node_fw` 分区，核对后经 ESP-NOW 推给节点
+（协议与防变砖见 [protocol.md](protocol.md#节点升级)）。同一份固件已在暂存区（SHA-256 相同）时不重复下载。
+
+- 回复 `ok: true` 只表示已开始；进度和结果看 `state.info.node_ota`：
+  `downloading` → `sending` → `rebooting` → `done`；或 `failed` + `error`
+- 立即拒绝：`bad_mac`、`bad_url`、`bad_sha256`、`no_such_node`、`offline`、`busy`（同一时间只升级一个节点，且不和网关升级同时进行）
+- 下载阶段拒绝（节点不受影响）：`wrong_chip` / `wrong_project` / `not_newer` / `not_an_app_image`（读到镜像头就拒绝）、
+  `connect_failed` / `download_failed` 等、`sha256_mismatch`
+- 推送阶段：`node_no_response`（节点固件太旧不支持升级，或不在线）、`node_timeout`（传输中断）、
+  `node_no_session`（节点中途重启）、`invalid_image_or_signature`、`node_sha256_mismatch` 等，节点继续运行旧固件
+- 重启后：`rolled_back`（新固件 60 秒内没连上网关，节点已回滚）、`no_rejoin`（150 秒没回来）
+
+`version.json` 中的节点固件：
+
+```json
+"nodes": [{"project": "esp_s3_korvo", "chip": "esp32s3", "version": "0.3.0",
+           "url": "https://gitee.com/.../esp_s3_korvo-esp32s3-0.3.0.bin", "sha256": "...", "size": 856064}]
+```
+
 ## 安全
 
 - 传输全程 TLS；broker 账号只能连上 broker，**控制网关还要带 API token**，token 只在配网或屏幕确认绑定时下发给手机。
 - 网关和 App 共用一组 broker 账号，能订阅所有 `espgw/#`。只供自己使用时足够；
   多用户时应给每个网关单独账号，并在 broker 上按 `espgw/<id>/#` 设置 ACL。
-- 网关固件升级仍只走局域网（`POST /api/ota/gateway`），远程升级以后再做。
+- 远程升级只接受 https 地址，固件还要过 SHA-256 和签名校验；拿到 broker 账号但没有 token 的人发不了升级命令。

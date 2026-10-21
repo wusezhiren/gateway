@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "mbedtls/sha256.h"
 #include "gw_http.h"
+#include "gw_node_ota.h"
 #include "gw_ota.h"
 
 static const char *TAG = "gw_ota";
@@ -22,7 +23,8 @@ static const char *TAG = "gw_ota";
 #define REBOOT_DELAY_MS 1500
 #define PULL_TIMEOUT_MS 20000
 #define PULL_MAX_REDIRECTS 5
-#define PULL_STACK      8192/* 镜像头 + 第一个段头之后就是 esp_app_desc_t */
+#define PULL_STACK      8192
+/* 镜像头 + 第一个段头之后就是 esp_app_desc_t */
 #define DESC_OFFSET     (sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t))
 #define HEAD_NEED       (DESC_OFFSET + sizeof(esp_app_desc_t))
 
@@ -74,9 +76,12 @@ static void reboot_task(void *arg)
     esp_restart();
 }
 
-/* 占用升级通道；已有升级在进行时返回 false */
+/* 占用升级通道；已有网关或节点升级在进行时返回 false */
 static bool reserve(uint32_t total, const char *version)
 {
+    if (gw_node_ota_busy()) {
+        return false;
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool busy = s_st.state == GW_OTA_RECEIVING || s_st.state == GW_OTA_REBOOTING;
     if (!busy) {
@@ -321,7 +326,7 @@ typedef struct {
 } pull_req_t;
 
 /* 读满 len 字节或读到结尾；出错返回 -1 */
-static int http_read_full(esp_http_client_handle_t c, char *buf, int len)
+int gw_ota_http_read(esp_http_client_handle_t c, char *buf, int len)
 {
     int got = 0;
     while (got < len) {
@@ -337,8 +342,8 @@ static int http_read_full(esp_http_client_handle_t c, char *buf, int len)
     return got;
 }
 
-/* 打开连接并跟随跳转（gitee 附件会跳到另一个域名），返回内容长度，失败返回 NULL 错误以外的字符串 */
-static const char *http_open(esp_http_client_handle_t c, int64_t *len)
+/* 打开连接并跟随跳转（gitee 附件会跳到另一个域名），len 返回内容长度；成功返回 NULL，否则为错误码 */
+const char *gw_ota_http_open(esp_http_client_handle_t c, int64_t *len)
 {
     for (int i = 0; i <= PULL_MAX_REDIRECTS; i++) {
         if (esp_http_client_open(c, 0) != ESP_OK) {
@@ -389,7 +394,7 @@ static void pull_task(void *arg)
     }
     ESP_LOGI(TAG, "downloading %s", req->url);
     int64_t len = 0;
-    err = http_open(c, &len);
+    err = gw_ota_http_open(c, &len);
     if (err) {
         goto out;
     }
@@ -401,7 +406,7 @@ static void pull_task(void *arg)
     s_st.total = (uint32_t)len;
     xSemaphoreGive(s_lock);
 
-    int n = http_read_full(c, buf, CHUNK < len ? CHUNK : (int)len);
+    int n = gw_ota_http_read(c, buf, CHUNK < len ? CHUNK : (int)len);
     if (n < 0) {
         err = "download_failed";
         goto out;
@@ -413,7 +418,7 @@ static void pull_task(void *arg)
         if (err || remain <= 0) {
             break;
         }
-        n = http_read_full(c, buf, remain < CHUNK ? remain : CHUNK);
+        n = gw_ota_http_read(c, buf, remain < CHUNK ? remain : CHUNK);
         if (n <= 0) {
             err = "download_failed";    /* 中途断开：已写的是空闲分区，丢弃即可 */
         }

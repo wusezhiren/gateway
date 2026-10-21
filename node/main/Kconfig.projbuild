@@ -50,4 +50,11 @@ menu "Node"
         default 9 if IDF_TARGET_ESP32C3
         default 0
 
+    config NODE_TEST_NO_JOIN_AFTER_OTA
+        bool "After an OTA, never contact the gateway (rollback test only)"
+        default n
+        help
+            Builds a deliberately broken firmware: after an OTA it stays silent, so the
+            validate timer must roll it back. Never ship this.
+
 endmenu

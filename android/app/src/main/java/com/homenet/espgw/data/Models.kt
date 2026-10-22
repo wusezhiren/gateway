@@ -118,11 +118,27 @@ data class GwInfo(
 }
 
 data class Channel(
-    val type: String,       // relay / pwm
+    val type: String,       // relay / pwm / rgb（取值见 Rgb）
     val max: Int,
     val value: Int,
     val desired: Int?,      // 网关记录的期望值，与 value 不同说明还没生效
 )
+
+/**
+ * 彩灯通道的取值：bit15 开关，bit14..8 亮度 1..100，bit7..0 颜色
+ * （0..239 为色相 ×1.5°，255 为白光）。与固件 meshproto.h 的 MP_RGB_* 一致。
+ */
+object Rgb {
+    const val ON = 0x8000
+    const val HUES = 240
+    const val WHITE = 255
+
+    fun on(v: Int) = v and ON != 0
+    fun brightness(v: Int) = ((v shr 8) and 0x7F).let { if (it in 1..100) it else 100 }
+    fun color(v: Int) = v and 0xFF
+    fun pack(on: Boolean, brightness: Int, color: Int) =
+        (if (on) ON else 0) or (brightness.coerceIn(1, 100) shl 8) or (color and 0xFF)
+}
 
 /** GET /api/nodes 中的一项 */
 data class Node(

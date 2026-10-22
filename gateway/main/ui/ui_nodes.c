@@ -93,7 +93,10 @@ void ui_nodes_update(void)
 
 typedef struct {
     lv_obj_t *ctrl;     /* switch 或 slider */
-    lv_obj_t *val;      /* PWM 数值 */
+    lv_obj_t *val;      /* PWM / 彩灯亮度百分比 */
+    lv_obj_t *bri;      /* 彩灯亮度滑条 */
+    lv_obj_t *sw[8];    /* 彩灯颜色色块 */
+    uint16_t rgb;       /* 彩灯当前值（MP_RGB_*） */
     uint8_t type;
     int64_t hold_until; /* 刚操作过：节点回报新值前不用旧值覆盖，免得开关弹回去 */
 } ch_ui_t;
@@ -157,6 +160,106 @@ static void slider_cb(lv_event_t *e)
     }
 }
 
+/* 彩灯色块：白光 + 7 个色相（MP_RGB_HUES 份里的序号） */
+static const uint8_t RGB_SWATCH[8] = {MP_RGB_WHITE, 0, 20, 40, 80, 120, 160, 200};
+
+static lv_color_t rgb_swatch_color(uint8_t color)
+{
+    return color == MP_RGB_WHITE ? lv_color_white() : lv_color_hsv_to_rgb(color * 360 / MP_RGB_HUES, 100, 100);
+}
+
+static void rgb_show(int ch, uint16_t v)
+{
+    unsigned bri = MP_RGB_BRI(v) ? MP_RGB_BRI(v) : 100;
+    s_ch[ch].rgb = v;
+    if (v & MP_RGB_ON) {
+        lv_obj_add_state(s_ch[ch].ctrl, LV_STATE_CHECKED);
+    } else {
+        lv_obj_remove_state(s_ch[ch].ctrl, LV_STATE_CHECKED);
+    }
+    lv_slider_set_value(s_ch[ch].bri, bri, LV_ANIM_OFF);
+    ui_label_fmt(s_ch[ch].val, "%u%%", bri);
+    for (int k = 0; k < 8; k++) {
+        lv_obj_set_style_border_color(s_ch[ch].sw[k], RGB_SWATCH[k] == MP_RGB_COLOR(v) ? UI_C_ACCENT : UI_C_LINE, 0);
+    }
+}
+
+static void rgb_send(int ch, uint16_t v)
+{
+    rgb_show(ch, v);
+    send_set(ch, v);
+}
+
+static void rgb_switch_cb(lv_event_t *e)
+{
+    int ch = (int)(intptr_t)lv_event_get_user_data(e);
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    rgb_send(ch, on ? s_ch[ch].rgb | MP_RGB_ON : s_ch[ch].rgb & ~MP_RGB_ON);
+}
+
+static void rgb_bri_cb(lv_event_t *e)
+{
+    int ch = (int)(intptr_t)lv_event_get_user_data(e);
+    int32_t v = lv_slider_get_value(lv_event_get_target(e));
+    ui_label_fmt(s_ch[ch].val, "%ld%%", (long)v);
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        rgb_send(ch, MP_RGB_PACK(1, v, MP_RGB_COLOR(s_ch[ch].rgb)));  /* 调亮度顺便开灯 */
+    }
+}
+
+static void rgb_color_cb(lv_event_t *e)
+{
+    int ch = (int)(intptr_t)lv_event_get_user_data(e);
+    uint8_t color = (uint8_t)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+    unsigned bri = MP_RGB_BRI(s_ch[ch].rgb) ? MP_RGB_BRI(s_ch[ch].rgb) : 100;
+    rgb_send(ch, MP_RGB_PACK(1, bri, color));
+}
+
+/* 彩灯一行：标题 + 开关，亮度滑条，颜色色块 */
+static void build_rgb(lv_obj_t *row, int i)
+{
+    lv_obj_t *l = ui_label(row, &font_cn_16, UI_C_TEXT, "");
+    ui_label_fmt(l, "彩灯 %d", i + 1);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 4);
+    s_ch[i].val = ui_label(row, &font_cn_16, UI_C_SUB, "");
+    lv_obj_align(s_ch[i].val, LV_ALIGN_TOP_LEFT, 64, 4);
+    s_ch[i].ctrl = lv_switch_create(row);
+    lv_obj_align(s_ch[i].ctrl, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_add_event_cb(s_ch[i].ctrl, rgb_switch_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
+
+    s_ch[i].bri = lv_slider_create(row);
+    lv_obj_set_width(s_ch[i].bri, lv_pct(94));
+    lv_obj_align(s_ch[i].bri, LV_ALIGN_TOP_MID, 0, 42);
+    lv_slider_set_range(s_ch[i].bri, 1, 100);
+    lv_obj_add_event_cb(s_ch[i].bri, rgb_bri_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
+    lv_obj_add_event_cb(s_ch[i].bri, rgb_bri_cb, LV_EVENT_RELEASED, (void *)(intptr_t)i);
+
+    lv_obj_t *box = lv_obj_create(row);
+    lv_obj_set_size(box, lv_pct(100), 32);
+    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    for (int k = 0; k < 8; k++) {
+        lv_obj_t *b = lv_obj_create(box);
+        lv_obj_set_size(b, 24, 24);
+        lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(b, rgb_swatch_color(RGB_SWATCH[k]), 0);
+        lv_obj_set_style_border_width(b, 3, 0);
+        lv_obj_set_style_border_color(b, UI_C_LINE, 0);
+        lv_obj_set_ext_click_area(b, 3);
+        lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(b, (void *)(intptr_t)RGB_SWATCH[k]);
+        lv_obj_add_event_cb(b, rgb_color_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        s_ch[i].sw[k] = b;
+    }
+    lv_obj_set_height(row, 100);
+}
+
 static void do_unpair(void *arg)
 {
     int idx = s_detail_idx;
@@ -190,8 +293,8 @@ static void build_channels(const gw_node_t *n)
         lv_obj_set_style_pad_ver(row, 4, 0);
         lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
+        memset(&s_ch[i], 0, sizeof(s_ch[i]));
         s_ch[i].type = n->ch[i].type;
-        s_ch[i].hold_until = 0;
         if (n->ch[i].type == MP_CH_RELAY) {
             lv_obj_t *l = ui_label(row, &font_cn_16, UI_C_TEXT, "");
             ui_label_fmt(l, "开关 %d", i + 1);
@@ -200,6 +303,8 @@ static void build_channels(const gw_node_t *n)
             lv_obj_align(s_ch[i].ctrl, LV_ALIGN_RIGHT_MID, 0, 0);
             lv_obj_add_event_cb(s_ch[i].ctrl, switch_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
             s_ch[i].val = NULL;
+        } else if (n->ch[i].type == MP_CH_RGB) {
+            build_rgb(row, i);
         } else {
             lv_obj_t *l = ui_label(row, &font_cn_16, UI_C_TEXT, "");
             ui_label_fmt(l, "调光 %d", i + 1);
@@ -316,10 +421,20 @@ void ui_node_detail_update(void)
         } else {
             lv_obj_add_state(c, LV_STATE_DISABLED);
         }
-        if (lv_obj_has_state(c, LV_STATE_PRESSED) || esp_timer_get_time() < s_ch[i].hold_until) {
+        if (s_ch[i].bri) {
+            if (n->online) {
+                lv_obj_remove_state(s_ch[i].bri, LV_STATE_DISABLED);
+            } else {
+                lv_obj_add_state(s_ch[i].bri, LV_STATE_DISABLED);
+            }
+        }
+        if (lv_obj_has_state(c, LV_STATE_PRESSED) || (s_ch[i].bri && lv_obj_has_state(s_ch[i].bri, LV_STATE_PRESSED)) ||
+            esp_timer_get_time() < s_ch[i].hold_until) {
             continue;   /* 正在操作，不用节点上报值覆盖 */
         }
-        if (s_ch[i].type == MP_CH_RELAY) {
+        if (s_ch[i].type == MP_CH_RGB) {
+            rgb_show(i, n->value[i]);
+        } else if (s_ch[i].type == MP_CH_RELAY) {
             if (n->value[i]) {
                 lv_obj_add_state(c, LV_STATE_CHECKED);
             } else {

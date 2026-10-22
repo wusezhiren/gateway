@@ -108,6 +108,7 @@ static const char *ch_type_name(uint8_t t)
     switch (t) {
     case MP_CH_RELAY: return "relay";
     case MP_CH_PWM:   return "pwm";
+    case MP_CH_RGB:   return "rgb";
     default:          return "unknown";
     }
 }

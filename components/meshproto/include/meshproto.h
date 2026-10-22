@@ -41,7 +41,21 @@ typedef enum {
 typedef enum {
     MP_CH_RELAY = 1,    /* 开关量，取值 0/1 */
     MP_CH_PWM   = 2,    /* 调光/调速，取值 0..max */
+    MP_CH_RGB   = 3,    /* 彩灯，取值按 MP_RGB_* 打包，max 为 0xFFFF */
 } mp_ch_type_t;
+
+/*
+ * MP_CH_RGB 的取值：bit15 开关，bit14..8 亮度 1..100，bit7..0 颜色
+ * （0..239 为色相 ×1.5°，全饱和；255 为白光；其余保留）。
+ * 关灯只清 bit15，亮度和颜色保留，再开灯时恢复。
+ */
+#define MP_RGB_ON           0x8000
+#define MP_RGB_BRI(v)       (((v) >> 8) & 0x7F)
+#define MP_RGB_COLOR(v)     ((v) & 0xFF)
+#define MP_RGB_HUES         240
+#define MP_RGB_WHITE        255
+#define MP_RGB_PACK(on, bri, color) \
+    ((uint16_t)(((on) ? MP_RGB_ON : 0) | (((bri) & 0x7F) << 8) | ((color) & 0xFF)))
 
 typedef struct __attribute__((packed)) {
     uint8_t  magic;

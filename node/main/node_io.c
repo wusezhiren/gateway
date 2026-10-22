@@ -6,6 +6,7 @@
 #include "esp_io_expander_tca9554.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "led_strip.h"
 #include "nvs.h"
 #include "sdkconfig.h"
 #include "node_io.h"
@@ -35,6 +36,9 @@ static const char *TAG = "node_io";
 #define PWM_ACTIVE_LOW 0
 #endif
 
+/* 彩灯开机默认：关、亮度 100、白光 */
+#define RGB_DEFAULT     MP_RGB_PACK(0, 100, MP_RGB_WHITE)
+
 typedef struct {
     uint8_t  type;
     bool     exp;       /* 继电器在 IO 扩展上，gpio 为扩展引脚号 */
@@ -47,6 +51,7 @@ static io_ch_t s_ch[MP_MAX_CH];
 static uint8_t s_n;
 static esp_timer_handle_t s_save_timer;
 static esp_io_expander_handle_t s_exp;
+static led_strip_handle_t s_strip;
 
 static void save_cb(void *arg);
 static void restore(void);
@@ -156,6 +161,65 @@ static esp_err_t add_pwm(int gpio, int ledc_ch)
     return ESP_OK;
 }
 
+static esp_err_t add_rgb(int gpio)
+{
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(gpio)) {
+        ESP_LOGE(TAG, "rgb gpio %d invalid", gpio);
+        return ESP_ERR_INVALID_ARG;
+    }
+    const led_strip_config_t cfg = {
+        .strip_gpio_num = gpio,
+        .max_leds = 1,
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+    };
+    const led_strip_rmt_config_t rmt = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000,
+    };
+    esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &s_strip);
+    if (err != ESP_OK) {
+        return err;
+    }
+    led_strip_clear(s_strip);
+    s_ch[s_n++] = (io_ch_t){.type = MP_CH_RGB, .gpio = gpio, .ledc_ch = -1, .value = RGB_DEFAULT};
+    return ESP_OK;
+}
+
+static void apply_rgb(uint16_t value)
+{
+    unsigned bri = MP_RGB_BRI(value);
+    unsigned color = MP_RGB_COLOR(value);
+    if (bri == 0 || bri > 100) {
+        bri = 100;
+    }
+    if (color >= MP_RGB_HUES && color != MP_RGB_WHITE) {
+        color = MP_RGB_WHITE;
+    }
+    if (!(value & MP_RGB_ON)) {
+        led_strip_clear(s_strip);
+        return;
+    }
+    /* 人眼对亮度近似平方关系，1% 也保证至少点亮 */
+    uint8_t v = 1 + 254 * bri * bri / 10000;
+    if (color == MP_RGB_WHITE) {
+        led_strip_set_pixel(s_strip, 0, v, v, v);
+    } else {
+        led_strip_set_pixel_hsv(s_strip, 0, color * 360 / MP_RGB_HUES, 255, v);
+    }
+    led_strip_refresh(s_strip);
+}
+
+static const char *type_name(uint8_t type)
+{
+    switch (type) {
+    case MP_CH_RELAY: return "relay";
+    case MP_CH_PWM:   return "pwm";
+    case MP_CH_RGB:   return "rgb";
+    default:          return "?";
+    }
+}
+
 esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
 {
     int gpios[MP_MAX_CH];
@@ -204,12 +268,21 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
         }
     }
 
+#if CONFIG_NODE_RGB_GPIO >= 0
+    if (s_n < MP_MAX_CH) {
+        esp_err_t err = add_rgb(CONFIG_NODE_RGB_GPIO);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "rgb led init failed: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+#endif
+
     memset(desc, 0, sizeof(mp_ch_desc_t) * MP_MAX_CH);
     for (int i = 0; i < s_n; i++) {
         desc[i].type = s_ch[i].type;
-        desc[i].max = s_ch[i].type == MP_CH_PWM ? PWM_MAX : 1;
-        ESP_LOGI(TAG, "ch%d %s %s %d", i, s_ch[i].type == MP_CH_PWM ? "pwm" : "relay",
-                 s_ch[i].exp ? "exp pin" : "gpio", s_ch[i].gpio);
+        desc[i].max = s_ch[i].type == MP_CH_PWM ? PWM_MAX : s_ch[i].type == MP_CH_RGB ? 0xFFFF : 1;
+        ESP_LOGI(TAG, "ch%d %s %s %d", i, type_name(s_ch[i].type), s_ch[i].exp ? "exp pin" : "gpio", s_ch[i].gpio);
     }
     *n_ch = s_n;
 
@@ -232,6 +305,8 @@ static void apply(uint8_t ch, uint16_t value)
         } else {
             gpio_set_level(c->gpio, RELAY_ACTIVE_LOW ? !value : value);
         }
+    } else if (c->type == MP_CH_RGB) {
+        apply_rgb(value);
     } else {
         if (value > PWM_MAX) {
             value = PWM_MAX;

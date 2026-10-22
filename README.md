@@ -59,7 +59,11 @@ idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_ko
 工程名区分固件种类，节点只接受同名固件的升级：硬件配置不同的板子要用不同的 `NODE_PROJECT`（不超过 16 个字符），
 并加到 `tools/release_app.py` 的 `NODE_BUILDS`。0.3.0 以前的节点不支持远程升级，需先 USB 烧一次。
 
-节点 GPIO 在 `idf.py menuconfig` → Node 中配置（默认继电器 GPIO4、5，PWM GPIO6）。
+节点 GPIO 在 `idf.py menuconfig` → Node 中配置（默认继电器 GPIO4、5，PWM GPIO6；S3 另有 GPIO48 上的 WS2812 彩灯）。
+手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
+
+ESP32-S3 N16R8 核心板（两个 Type-C，板载 WS2812 在 GPIO48）：用 `build_s3`，接标 USB 的原生口烧录；
+GPIO35/36/37 被八线 PSRAM 占用，不要外接。
 ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
 
 ## 网关串口命令

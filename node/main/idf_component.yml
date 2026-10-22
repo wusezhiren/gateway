@@ -1,3 +1,4 @@
 dependencies:
   idf: ">=5.4"
   espressif/esp_io_expander_tca9554: "^2.0.0"
+  espressif/led_strip: "^3.0.0"

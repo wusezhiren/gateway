@@ -69,7 +69,7 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 ```
 
 - `chip`：`esp32c3` / `esp32s3` / `esp32c6` / `unknown`
-- `ch[].type`：`relay`（0/1）/ `pwm`（0..max）；`desired` 存在且与 `value` 不同表示正在同步
+- `ch[].type`：`relay`（0/1）/ `pwm`（0..max）/ `rgb`（彩灯，`max` 65535，取值按位打包开关、亮度、颜色，见 [protocol.md](protocol.md#通道描述-mp_ch_desc_t)）；`desired` 存在且与 `value` 不同表示正在同步
 - `last_seen_s`：距最后一次收到该节点消息的秒数，从未收到为 -1
 
 ### `POST /api/nodes/set`

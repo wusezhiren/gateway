@@ -44,6 +44,16 @@ menu "Node"
         bool "PWM output inverted (e.g. LED to VCC)"
         default n
 
+    config NODE_RGB_GPIO
+        int "WS2812 RGB LED GPIO, -1 for none"
+        range -1 48
+        default 48 if IDF_TARGET_ESP32S3
+        default -1
+        help
+            One addressable RGB LED as a colour light channel, added after the PWM
+            channels. Most ESP32-S3 core boards (DevKitC-1 v1.1, N16R8 core board)
+            have it on GPIO48.
+
     config NODE_RESET_GPIO
         int "Button to forget gateway (hold 3 s), -1 to disable"
         range -1 48

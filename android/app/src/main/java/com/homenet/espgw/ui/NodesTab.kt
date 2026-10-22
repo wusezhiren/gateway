@@ -1,6 +1,7 @@
 package com.homenet.espgw.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,6 +27,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,12 +40,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.homenet.espgw.data.Channel
 import com.homenet.espgw.data.Node
 import com.homenet.espgw.data.NodeFirmware
 import com.homenet.espgw.data.NodeOtaStatus
+import com.homenet.espgw.data.Rgb
 import com.homenet.espgw.data.gatewayErrorText
 import com.homenet.espgw.ui.theme.OkGreen
 import com.homenet.espgw.ui.theme.WarnOrange
@@ -201,6 +206,10 @@ private fun NodeOtaLine(ota: NodeOtaStatus) {
 
 @Composable
 private fun ChannelControl(index: Int, ch: Channel, enabled: Boolean, onSet: (Int) -> Unit) {
+    if (ch.type == "rgb") {
+        RgbControl(index, ch, enabled, onSet)
+        return
+    }
     val pending = ch.desired != null && ch.desired != ch.value
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -281,5 +290,96 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
             onConfirm = onUnpair,
             onDismiss = { confirm = false },
         )
+    }
+}
+
+/** 彩灯色块：白光 + 7 个色相（Rgb.HUES 份里的序号） */
+private val RGB_SWATCHES = listOf(Rgb.WHITE, 0, 20, 40, 80, 120, 160, 200)
+
+private fun rgbColor(color: Int): Color =
+    if (color == Rgb.WHITE || color >= Rgb.HUES) Color.White
+    else Color.hsv(color * 360f / Rgb.HUES, 1f, 1f)
+
+@Composable
+private fun RgbControl(index: Int, ch: Channel, enabled: Boolean, onSet: (Int) -> Unit) {
+    val v = ch.desired ?: ch.value
+    val pending = ch.desired != null && ch.desired != ch.value
+    val on = Rgb.on(v)
+    val color = Rgb.color(v)
+    // 拖动时只改本地值，松手才发送
+    var briDrag by remember { mutableStateOf<Float?>(null) }
+    var hueDrag by remember { mutableStateOf<Float?>(null) }
+    val bri = briDrag ?: Rgb.brightness(v).toFloat()
+
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(14.dp).clip(CircleShape).background(if (on) rgbColor(color) else Color.Gray))
+            Text(
+                "  彩灯 ${index + 1}" + if (pending) "（同步中）" else "",
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = on,
+                onCheckedChange = { onSet(Rgb.pack(it, Rgb.brightness(v), color)) },
+                enabled = enabled,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("亮度", modifier = Modifier.width(48.dp))
+            Slider(
+                value = bri,
+                onValueChange = { briDrag = it },
+                onValueChangeFinished = {
+                    briDrag?.let { onSet(Rgb.pack(true, it.toInt(), color)) }  // 调亮度顺便开灯
+                    briDrag = null
+                },
+                valueRange = 1f..100f,
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+            )
+            Text("${bri.toInt()}%", modifier = Modifier.width(48.dp).padding(start = 8.dp))
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            RGB_SWATCHES.forEach { c ->
+                val selected = c == color
+                Box(
+                    Modifier.size(30.dp).clip(CircleShape).background(rgbColor(c))
+                        .border(
+                            if (selected) 3.dp else 1.dp,
+                            if (selected) MaterialTheme.colorScheme.primary else Color.Gray,
+                            CircleShape,
+                        )
+                        .clickable(enabled = enabled) { onSet(Rgb.pack(true, Rgb.brightness(v), c)) },
+                )
+            }
+        }
+        // 色相滑条：任意颜色
+        val hue = hueDrag ?: (if (color < Rgb.HUES) color else 0).toFloat()
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(8.dp).clip(CircleShape)
+                    .background(Brush.horizontalGradient(List(7) { Color.hsv(it * 60f % 360f, 1f, 1f) }))
+            )
+            Slider(
+                value = hue,
+                onValueChange = { hueDrag = it },
+                onValueChangeFinished = {
+                    hueDrag?.let { onSet(Rgb.pack(true, Rgb.brightness(v), it.toInt().coerceIn(0, Rgb.HUES - 1))) }
+                    hueDrag = null
+                },
+                valueRange = 0f..(Rgb.HUES - 1).toFloat(),
+                enabled = enabled,
+                colors = SliderDefaults.colors(
+                    thumbColor = rgbColor(hue.toInt()),
+                    activeTrackColor = Color.Transparent,
+                    inactiveTrackColor = Color.Transparent,
+                    disabledActiveTrackColor = Color.Transparent,
+                    disabledInactiveTrackColor = Color.Transparent,
+                ),
+            )
+        }
     }
 }

@@ -1,0 +1,15 @@
+# 合宙 CORE-ESP32-C3（4MB flash，CH343P）+ 单路低电平触发继电器，继电器通断 USB 灯条 5V
+# 编译（工程名 esp_c3_relay，与通用 C3 节点固件区分，升级时不会互相刷错）：
+#   idf.py -B build_c3relay -D SDKCONFIG=build_c3relay/sdkconfig -D NODE_PROJECT=esp_c3_relay \
+#         -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.c3relay" set-target esp32c3 build
+# 接线：继电器 IN -> GPIO4（右排 28 脚），VCC -> 3V3（26 脚），GND -> GND（25 脚）
+#（低电平触发模块接 5V 时 3.3V 高电平可能关不断）
+CONFIG_NODE_NAME="lamp"
+CONFIG_NODE_RELAY_GPIOS="4"
+CONFIG_NODE_RELAY_ACTIVE_LOW=y
+CONFIG_NODE_PWM_GPIOS=""
+CONFIG_NODE_RGB_GPIO=-1
+# 长按 BOOT 3 秒解绑
+CONFIG_NODE_RESET_GPIO=9
+# 板载 flash 是 DIO 接法，GPIO12/13 接板上 LED D4/D5，不能改成 QIO
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y

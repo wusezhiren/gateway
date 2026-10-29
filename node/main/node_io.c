@@ -88,8 +88,9 @@ static esp_err_t add_relay(int gpio)
         return ESP_ERR_INVALID_ARG;
     }
     gpio_reset_pin(gpio);
-    gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
+    /* 先设电平再切输出，低电平触发的继电器上电时不会被拉低一下 */
     gpio_set_level(gpio, RELAY_ACTIVE_LOW ? 1 : 0);
+    gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
     s_ch[s_n++] = (io_ch_t){.type = MP_CH_RELAY, .gpio = gpio, .ledc_ch = -1};
     return ESP_OK;
 }
@@ -161,6 +162,7 @@ static esp_err_t add_pwm(int gpio, int ledc_ch)
     return ESP_OK;
 }
 
+#if CONFIG_NODE_RGB_GPIO >= 0
 static esp_err_t add_rgb(int gpio)
 {
     if (!GPIO_IS_VALID_OUTPUT_GPIO(gpio)) {
@@ -185,6 +187,7 @@ static esp_err_t add_rgb(int gpio)
     s_ch[s_n++] = (io_ch_t){.type = MP_CH_RGB, .gpio = gpio, .ledc_ch = -1, .value = RGB_DEFAULT};
     return ESP_OK;
 }
+#endif
 
 static void apply_rgb(uint16_t value)
 {

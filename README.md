@@ -62,6 +62,14 @@ idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_ko
 节点 GPIO 在 `idf.py menuconfig` → Node 中配置（默认继电器 GPIO4、5，PWM GPIO6；S3 另有 GPIO48 上的 WS2812 彩灯）。
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
+合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，
+继电器 IN 接 GPIO4、VCC 接 3V3：
+
+```bash
+idf.py -B build_c3relay -DSDKCONFIG=build_c3relay/sdkconfig -DNODE_PROJECT=esp_c3_relay \
+       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.c3relay" set-target esp32c3 build
+```
+
 ESP32-S3 N16R8 核心板（两个 Type-C，板载 WS2812 在 GPIO48）：用 `build_s3`，接标 USB 的原生口烧录；
 GPIO35/36/37 被八线 PSRAM 占用，不要外接。
 ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。

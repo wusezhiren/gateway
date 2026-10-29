@@ -42,6 +42,8 @@ NODE_BUILDS = [
     ('build_s3', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_s3/sdkconfig']),
     ('build_korvo', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_korvo/sdkconfig', '-DNODE_PROJECT=esp_s3_korvo',
                      '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.korvo']),
+    ('build_c3relay', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3relay/sdkconfig', '-DNODE_PROJECT=esp_c3_relay',
+                       '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.c3relay']),
 ]
 CHIPS = {5: 'esp32c3', 9: 'esp32s3', 13: 'esp32c6'}
 APK = ROOT / 'android' / 'app' / 'build' / 'outputs' / 'apk' / 'release' / 'app-release.apk'

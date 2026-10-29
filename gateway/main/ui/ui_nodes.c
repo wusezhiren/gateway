@@ -177,8 +177,10 @@ static void rgb_show(int ch, uint16_t v)
     } else {
         lv_obj_remove_state(s_ch[ch].ctrl, LV_STATE_CHECKED);
     }
-    lv_slider_set_value(s_ch[ch].bri, bri, LV_ANIM_OFF);
-    ui_label_fmt(s_ch[ch].val, "%u%%", bri);
+    /* 关灯时滑条显示 0，亮度仍记在取值里 */
+    unsigned shown = (v & MP_RGB_ON) ? bri : 0;
+    lv_slider_set_value(s_ch[ch].bri, shown, LV_ANIM_OFF);
+    ui_label_fmt(s_ch[ch].val, "%u%%", shown);
     for (int k = 0; k < 8; k++) {
         lv_obj_set_style_border_color(s_ch[ch].sw[k], RGB_SWATCH[k] == MP_RGB_COLOR(v) ? UI_C_ACCENT : UI_C_LINE, 0);
     }
@@ -203,7 +205,8 @@ static void rgb_bri_cb(lv_event_t *e)
     int32_t v = lv_slider_get_value(lv_event_get_target(e));
     ui_label_fmt(s_ch[ch].val, "%ld%%", (long)v);
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
-        rgb_send(ch, MP_RGB_PACK(1, v, MP_RGB_COLOR(s_ch[ch].rgb)));  /* 调亮度顺便开灯 */
+        /* 拖到 0 关灯并保留原亮度，拖到其他值顺便开灯 */
+        rgb_send(ch, v == 0 ? s_ch[ch].rgb & ~MP_RGB_ON : MP_RGB_PACK(1, v, MP_RGB_COLOR(s_ch[ch].rgb)));
     }
 }
 
@@ -230,7 +233,7 @@ static void build_rgb(lv_obj_t *row, int i)
     s_ch[i].bri = lv_slider_create(row);
     lv_obj_set_width(s_ch[i].bri, lv_pct(94));
     lv_obj_align(s_ch[i].bri, LV_ALIGN_TOP_MID, 0, 42);
-    lv_slider_set_range(s_ch[i].bri, 1, 100);
+    lv_slider_set_range(s_ch[i].bri, 0, 100);
     lv_obj_add_event_cb(s_ch[i].bri, rgb_bri_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
     lv_obj_add_event_cb(s_ch[i].bri, rgb_bri_cb, LV_EVENT_RELEASED, (void *)(intptr_t)i);
 

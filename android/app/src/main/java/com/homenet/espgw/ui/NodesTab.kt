@@ -43,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.homenet.espgw.data.Channel
 import com.homenet.espgw.data.Node
 import com.homenet.espgw.data.NodeFirmware
@@ -309,7 +310,8 @@ private fun RgbControl(index: Int, ch: Channel, enabled: Boolean, onSet: (Int) -
     // 拖动时只改本地值，松手才发送
     var briDrag by remember { mutableStateOf<Float?>(null) }
     var hueDrag by remember { mutableStateOf<Float?>(null) }
-    val bri = briDrag ?: Rgb.brightness(v).toFloat()
+    // 关灯时滑条显示 0，亮度仍记在取值里
+    val bri = briDrag ?: (if (on) Rgb.brightness(v) else 0).toFloat()
 
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -330,14 +332,18 @@ private fun RgbControl(index: Int, ch: Channel, enabled: Boolean, onSet: (Int) -
                 value = bri,
                 onValueChange = { briDrag = it },
                 onValueChangeFinished = {
-                    briDrag?.let { onSet(Rgb.pack(true, it.toInt(), color)) }  // 调亮度顺便开灯
+                    // 拖到 0 关灯并保留原亮度，拖到其他值顺便开灯
+                    briDrag?.let {
+                        val b = it.roundToInt()
+                        onSet(if (b == 0) Rgb.pack(false, Rgb.brightness(v), color) else Rgb.pack(true, b, color))
+                    }
                     briDrag = null
                 },
-                valueRange = 1f..100f,
+                valueRange = 0f..100f,
                 enabled = enabled,
                 modifier = Modifier.weight(1f),
             )
-            Text("${bri.toInt()}%", modifier = Modifier.width(48.dp).padding(start = 8.dp))
+            Text("${bri.roundToInt()}%", modifier = Modifier.width(48.dp).padding(start = 8.dp))
         }
         Row(
             Modifier.fillMaxWidth().padding(vertical = 4.dp),

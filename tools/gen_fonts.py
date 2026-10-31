@@ -4,7 +4,7 @@
   tools/gen_fonts.py --font <中文 TTF>
 
 font_cn_16：ASCII + 中文标点 + GB2312 一级汉字（3755）+ UI 源码里出现的字，正文用
-font_cn_24：ASCII + UI 源码里出现的字，标题用
+font_cn_24：同上，标题用（节点名、Wi-Fi 名也显示在标题里，所以同样要带一级汉字，约 550 KB）
 图标等缺字回退到 LVGL 自带的 Montserrat（LV_SYMBOL_*）。
 UI 文案新增了不常用的字后需要重新生成。
 """
@@ -61,7 +61,7 @@ def main():
     ui = ui_chars()
     body = ''.join(sorted(set(PUNCT + gb2312_level1() + ui)))
     conv(args.font, 16, body, 'font_cn_16')
-    conv(args.font, 24, ''.join(sorted(set(PUNCT + ui))), 'font_cn_24')
+    conv(args.font, 24, body, 'font_cn_24')
     return 0
 
 

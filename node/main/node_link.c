@@ -5,6 +5,8 @@
  * 升级帧交给 node_ota.c 处理。
  * OTA 后首次启动：入网并收到首个 HB_ACK 才确认新固件有效，VALIDATE_TIMEOUT_US 内未完成则回滚。
  * 已绑定网关时只接受该网关的应答，收到 LEAVE 或长按复位键才清除绑定。
+ * 深睡（NODE_SLEEP_INTERVAL_S）：通道全关时收到 HB_ACK 或找不到网关就深睡，定时醒来重新开机入网，
+ * 网关在入网后的首个心跳里补发睡着期间的命令（SET 先于 HB_ACK 到达，开了灯就不再睡）。
  */
 #include <string.h>
 #include "esp_app_desc.h"
@@ -14,6 +16,8 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_ota_ops.h"
+#include "esp_sleep.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -31,6 +35,8 @@ static const char *TAG = "node_link";
 #define SCAN_PAUSE_MS   1000
 #define MAX_CHANNEL     13
 #define VALIDATE_TIMEOUT_US (60 * 1000 * 1000LL)
+#define COLD_AWAKE_US   (30 * 1000 * 1000LL)    /* 上电后先醒着，方便 USB 烧录和长按复位键 */
+#define STAY_AWAKE_US   (30 * 1000 * 1000LL)    /* 网关要求保持唤醒，每个 HB_ACK 续期 */
 
 typedef struct {
     uint8_t src[6];
@@ -51,6 +57,7 @@ static uint8_t s_gw_ch;
 static uint16_t s_hb_ms = MP_HB_INTERVAL_MS;
 static bool s_pending_verify;   /* 运行的是 OTA 后尚未确认的新固件 */
 static esp_timer_handle_t s_validate_timer;
+static int64_t s_stay_until_us;  /* 这之前不深睡 */
 
 static uint16_t next_seq(void)
 {
@@ -139,6 +146,7 @@ static bool try_join(uint8_t channel)
     memcpy(req.project, app->project_name, strnlen(app->project_name, MP_PROJ_LEN));
     memcpy(req.name, s_name, MP_NAME_LEN);
     memcpy(req.ch, s_desc, sizeof(req.ch));
+    req.sleep_s = CONFIG_NODE_SLEEP_INTERVAL_S;
     esp_now_send(MP_BROADCAST, (const uint8_t *)&req, sizeof(req));
 
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(JOIN_WAIT_MS);
@@ -178,6 +186,22 @@ static bool try_join(uint8_t channel)
     }
 }
 
+/* 条件满足就深睡，醒来从头开机，不返回 */
+static void maybe_sleep(void)
+{
+#if CONFIG_NODE_SLEEP_INTERVAL_S > 0
+    if (!s_bound || s_pending_verify || node_ota_active() || !node_io_all_off() ||
+        esp_timer_get_time() < s_stay_until_us) {
+        return;
+    }
+    ESP_LOGI(TAG, "all channels off, deep sleep %d s", CONFIG_NODE_SLEEP_INTERVAL_S);
+    node_io_prepare_sleep();
+    esp_wifi_stop();
+    esp_sleep_enable_timer_wakeup((uint64_t)CONFIG_NODE_SLEEP_INTERVAL_S * 1000000);
+    esp_deep_sleep_start();
+#endif
+}
+
 static void scan_until_joined(void)
 {
     for (;;) {
@@ -192,6 +216,7 @@ static void scan_until_joined(void)
                 return;
             }
         }
+        maybe_sleep();
         ESP_LOGI(TAG, "no gateway found, retry");
         vTaskDelay(pdMS_TO_TICKS(SCAN_PAUSE_MS));
     }
@@ -233,6 +258,10 @@ static void run_joined(void)
                 esp_ota_mark_app_valid_cancel_rollback();
                 ESP_LOGI(TAG, "new firmware marked valid");
             }
+            if (m.len >= sizeof(mp_hb_ack_t) && (((const mp_hb_ack_t *)m.data)->flags & MP_HB_F_STAY_AWAKE)) {
+                s_stay_until_us = esp_timer_get_time() + STAY_AWAKE_US;
+            }
+            maybe_sleep();
             break;
         case MP_SET: {
             const mp_set_t *set = (const mp_set_t *)m.data;
@@ -343,6 +372,9 @@ esp_err_t node_link_start(const mp_ch_desc_t desc[MP_MAX_CH], uint8_t n_ch)
     ESP_LOGI(TAG, "node \"%s\" " MACSTR ", %s v%s, %d channels", s_name, MAC2STR(s_my_mac),
              app->project_name, app->version, s_n_ch);
     check_pending_verify();
+    if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
+        s_stay_until_us = COLD_AWAKE_US;
+    }
 
     /* 升级收尾时 esp_ota_end 要校验签名，4K 栈不够 */
     if (xTaskCreate(link_task, "node_link", 8192, NULL, 5, NULL) != pdPASS) {

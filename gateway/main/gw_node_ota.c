@@ -494,6 +494,31 @@ static const char *wait_rejoin(const uint8_t mac[6], uint32_t joins, const char 
     return "no_rejoin";
 }
 
+/* 深睡节点：要求它保持唤醒，等它下次醒来入网；out 更新为醒来后的节点信息 */
+static const char *wake_node(const uint8_t mac[6], gw_node_t *out)
+{
+    gw_node_t node;
+    if (!gw_link_get_node(mac, &node, NULL)) {
+        return "no_such_node";
+    }
+    uint32_t joins = node.joins;
+    int64_t deadline = esp_timer_get_time() + ((int64_t)node.sleep_s + 10) * 1000000;
+    ESP_LOGI(TAG, "node " MACSTR " sleeps %u s, waiting for it to wake", MAC2STR(mac), node.sleep_s);
+    gw_link_stay_awake(mac, true);
+    while (esp_timer_get_time() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        if (!gw_link_get_node(mac, &node, NULL)) {
+            return "no_such_node";
+        }
+        if (node.joins != joins) {
+            /* 等它发完首个心跳、收到带保持唤醒标志的 HB_ACK */
+            vTaskDelay(pdMS_TO_TICKS(500));
+            return find_node(mac, out);
+        }
+    }
+    return "node_asleep";
+}
+
 static const char *run_job(const job_t *job)
 {
     gw_node_t node;
@@ -522,6 +547,9 @@ static const char *run_job(const job_t *job)
     char version[MP_VER_LEN + 1];
     strlcpy(version, ((const esp_app_desc_t *)(head + DESC_OFFSET))->version, sizeof(version));
     err = find_node(job->mac, &node);   /* 下载期间可能掉线 */
+    if (!err && node.sleep_s) {
+        err = wake_node(job->mac, &node);
+    }
     if (err) {
         return err;
     }
@@ -536,7 +564,9 @@ static const char *run_job(const job_t *job)
 static void job_task(void *arg)
 {
     job_t *job = arg;
-    finish(run_job(job));
+    const char *err = run_job(job);
+    gw_link_stay_awake(job->mac, false);
+    finish(err);
     free(job->url);
     free(job);
     vTaskDelete(NULL);

@@ -63,7 +63,7 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 {"pair_left": 0,
  "nodes": [{"mac": "aa:bb:cc:dd:ee:ff", "name": "relay-1", "online": true, "rssi": -48,
             "uptime_s": 3600, "last_seen_s": 2, "version": "0.1.0", "project": "esp_s3_node",
-            "chip": "esp32c3",
+            "chip": "esp32c3", "sleep_s": 0,
             "ch": [{"type": "relay", "max": 1, "value": 1},
                    {"type": "pwm", "max": 1023, "value": 512, "desired": 600}]}]}
 ```
@@ -71,6 +71,8 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 - `chip`：`esp32c3` / `esp32s3` / `esp32c6` / `unknown`
 - `ch[].type`：`relay`（0/1）/ `pwm`（0..max）/ `rgb`（彩灯，`max` 65535，取值按位打包开关、亮度、颜色，见 [protocol.md](protocol.md#通道描述-mp_ch_desc_t)）；`desired` 存在且与 `value` 不同表示正在同步
 - `last_seen_s`：距最后一次收到该节点消息的秒数，从未收到为 -1
+- `sleep_s`：节点通道全关时深睡、每隔这么多秒醒来一次，0 为常醒（老节点、网关重启后节点还没入网时也是 0）。
+  深睡节点的 `set` 同样返回 `ok`，命令在节点下次醒来时生效，最长延迟 `sleep_s` 秒
 
 ### `POST /api/nodes/set`
 
@@ -85,6 +87,12 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 ### `POST /api/nodes/unpair`
 
 `{"mac": "..."}` → `{"ok": true}`；错误同上。
+
+### `POST /api/nodes/rename`
+
+`{"mac": "...", "name": "客厅灯条"}` → `{"ok": true}`。名字存在网关上，1~16 字节 UTF-8（约 5 个汉字），
+超长或含控制字符返回 `400 bad_name`；改名后节点重新入网也不会被它上报的默认名覆盖，解绑后失效。
+网关屏幕字库只有常用汉字，生僻字会显示不出来。
 
 ### `POST /api/pair`
 

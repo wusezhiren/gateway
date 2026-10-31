@@ -30,6 +30,8 @@ typedef struct {
     uint8_t      desired_mask;          /* desired 中有效的通道位图 */
     bool         resync;                /* 刚入网，等待首个状态上报做比对 */
     uint32_t     joins;                 /* 本次开机以来的入网次数，升级时据此判断节点已重启 */
+    uint16_t     sleep_s;               /* 节点深睡周期，0 = 常醒；睡着期间的命令等它醒来入网时补发 */
+    bool         stay_awake;            /* HB_ACK 里要求节点暂不深睡 */
 } gw_node_t;
 
 typedef enum {
@@ -54,6 +56,12 @@ bool gw_link_get_node(const uint8_t mac[6], gw_node_t *out, int *idx);
 
 esp_err_t gw_link_set(int idx, uint8_t ch, uint16_t value);
 esp_err_t gw_link_unpair(int idx);
+
+/* 用户改名，name 为 1..MP_NAME_LEN 字节的 UTF-8；之后节点重新入网也不会被它上报的名字覆盖 */
+esp_err_t gw_link_rename(int idx, const char *name);
+
+/* 要求深睡节点保持唤醒（下次醒来的 HB_ACK 起生效），升级前用 */
+void gw_link_stay_awake(const uint8_t mac[6], bool on);
 
 /* 打开配对窗口 seconds 秒，0 立即关闭 */
 void gw_link_pair(uint32_t seconds);

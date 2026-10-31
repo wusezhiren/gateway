@@ -39,8 +39,16 @@ static const char *TAG = "node_io";
 /* 彩灯开机默认：关、亮度 100、白光 */
 #define RGB_DEFAULT     MP_RGB_PACK(0, 100, MP_RGB_WHITE)
 
+/* 灯效：对外是开关通道，开着时由定时器刷 LEDC 占空比 */
+#define FX_TICK_US      (20 * 1000)
+#define BREATH_MS       3000    /* 呼吸一个来回 */
+#define BLINK_HALF_MS   1000    /* 慢闪亮、灭各 1s */
+
+enum { FX_NONE, FX_BREATH, FX_BLINK };
+
 typedef struct {
     uint8_t  type;
+    uint8_t  fx;        /* FX_*，非 FX_NONE 时用 ledc_ch 输出 */
     bool     exp;       /* 继电器在 IO 扩展上，gpio 为扩展引脚号 */
     int      gpio;
     int      ledc_ch;
@@ -50,6 +58,8 @@ typedef struct {
 static io_ch_t s_ch[MP_MAX_CH];
 static uint8_t s_n;
 static esp_timer_handle_t s_save_timer;
+static esp_timer_handle_t s_fx_timer;
+static int s_ledc_n;    /* 已分配的 LEDC 通道数，PWM 和灯效共用 LEDC_TIMER_0 */
 static esp_io_expander_handle_t s_exp;
 static led_strip_handle_t s_strip;
 
@@ -140,11 +150,35 @@ static esp_err_t add_exp_relay(int pin)
     return ESP_OK;
 }
 
-static esp_err_t add_pwm(int gpio, int ledc_ch)
+static esp_err_t ledc_timer_init(void)
 {
+    static bool done;
+    if (done) {
+        return ESP_OK;
+    }
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = PWM_RES,
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = PWM_FREQ_HZ,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    esp_err_t err = ledc_timer_config(&timer);
+    done = err == ESP_OK;
+    return err;
+}
+
+/* PWM 调光通道；fx 非 FX_NONE 时对外是开关通道，由灯效定时器驱动 */
+static esp_err_t add_pwm(int gpio, uint8_t fx)
+{
+    int ledc_ch = s_ledc_n;
     if (!GPIO_IS_VALID_OUTPUT_GPIO(gpio) || ledc_ch >= LEDC_CHANNEL_MAX) {
         ESP_LOGE(TAG, "pwm gpio %d / ledc channel %d invalid", gpio, ledc_ch);
         return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t err = ledc_timer_init();
+    if (err != ESP_OK) {
+        return err;
     }
     ledc_channel_config_t cfg = {
         .gpio_num = gpio,
@@ -154,12 +188,36 @@ static esp_err_t add_pwm(int gpio, int ledc_ch)
         .duty = 0,
         .flags.output_invert = PWM_ACTIVE_LOW,
     };
-    esp_err_t err = ledc_channel_config(&cfg);
+    err = ledc_channel_config(&cfg);
     if (err != ESP_OK) {
         return err;
     }
-    s_ch[s_n++] = (io_ch_t){.type = MP_CH_PWM, .gpio = gpio, .ledc_ch = ledc_ch};
+    s_ledc_n++;
+    s_ch[s_n++] = (io_ch_t){.type = fx ? MP_CH_RELAY : MP_CH_PWM, .fx = fx, .gpio = gpio, .ledc_ch = ledc_ch};
     return ESP_OK;
+}
+
+/* 开着的灯效通道按时间算占空比，关着的写 0；每次都全写一遍，不怕和 apply 抢 */
+static void fx_tick(void *arg)
+{
+    uint32_t ms = (uint32_t)(esp_timer_get_time() / 1000);
+    for (int i = 0; i < s_n; i++) {
+        io_ch_t *c = &s_ch[i];
+        if (c->fx == FX_NONE) {
+            continue;
+        }
+        uint32_t duty = 0;
+        if (c->value && c->fx == FX_BREATH) {
+            /* 三角波 0..1000 再平方，人眼看起来亮度变化均匀 */
+            uint32_t ph = ms % BREATH_MS;
+            uint32_t tri = (ph < BREATH_MS / 2 ? ph : BREATH_MS - ph) * 1000 / (BREATH_MS / 2);
+            duty = (uint32_t)((uint64_t)PWM_DUTY_FULL * tri * tri / 1000000);
+        } else if (c->value && c->fx == FX_BLINK) {
+            duty = (ms / BLINK_HALF_MS) % 2 ? 0 : PWM_DUTY_FULL;
+        }
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, c->ledc_ch, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, c->ledc_ch);
+    }
 }
 
 #if CONFIG_NODE_RGB_GPIO >= 0
@@ -250,22 +308,33 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
         }
     }
 
-    n = parse_gpios(CONFIG_NODE_PWM_GPIOS, gpios, MP_MAX_CH - s_n);
-    if (n > 0) {
-        ledc_timer_config_t timer = {
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .duty_resolution = PWM_RES,
-            .timer_num = LEDC_TIMER_0,
-            .freq_hz = PWM_FREQ_HZ,
-            .clk_cfg = LEDC_AUTO_CLK,
-        };
-        esp_err_t err = ledc_timer_config(&timer);
-        if (err != ESP_OK) {
-            return err;
+    /* PWM、呼吸、慢闪依次排在继电器之后 */
+    static const struct {
+        const char *list;
+        uint8_t fx;
+    } ledc_lists[] = {
+        {CONFIG_NODE_PWM_GPIOS, FX_NONE},
+        {CONFIG_NODE_BREATH_GPIOS, FX_BREATH},
+        {CONFIG_NODE_BLINK_GPIOS, FX_BLINK},
+    };
+    s_ledc_n = 0;
+    bool has_fx = false;
+    for (int l = 0; l < sizeof(ledc_lists) / sizeof(ledc_lists[0]); l++) {
+        n = parse_gpios(ledc_lists[l].list, gpios, MP_MAX_CH - s_n);
+        for (int i = 0; i < n; i++) {
+            esp_err_t err = add_pwm(gpios[i], ledc_lists[l].fx);
+            if (err != ESP_OK) {
+                return err;
+            }
+            has_fx |= ledc_lists[l].fx != FX_NONE;
         }
     }
-    for (int i = 0; i < n; i++) {
-        esp_err_t err = add_pwm(gpios[i], i);
+    if (has_fx) {
+        const esp_timer_create_args_t fx_args = {.callback = fx_tick, .name = "io_fx"};
+        esp_err_t err = esp_timer_create(&fx_args, &s_fx_timer);
+        if (err == ESP_OK) {
+            err = esp_timer_start_periodic(s_fx_timer, FX_TICK_US);
+        }
         if (err != ESP_OK) {
             return err;
         }
@@ -285,7 +354,9 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
     for (int i = 0; i < s_n; i++) {
         desc[i].type = s_ch[i].type;
         desc[i].max = s_ch[i].type == MP_CH_PWM ? PWM_MAX : s_ch[i].type == MP_CH_RGB ? 0xFFFF : 1;
-        ESP_LOGI(TAG, "ch%d %s %s %d", i, type_name(s_ch[i].type), s_ch[i].exp ? "exp pin" : "gpio", s_ch[i].gpio);
+        static const char *const fx_name[] = {"", " (breath)", " (blink)"};
+        ESP_LOGI(TAG, "ch%d %s %s %d%s", i, type_name(s_ch[i].type), s_ch[i].exp ? "exp pin" : "gpio", s_ch[i].gpio,
+                 fx_name[s_ch[i].fx]);
     }
     *n_ch = s_n;
 
@@ -293,6 +364,13 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
     esp_err_t err = esp_timer_create(&args, &s_save_timer);
     if (err != ESP_OK) {
         return err;
+    }
+    /* 深睡醒来：引脚已按关的电平配好，再解除睡前的保持 */
+    gpio_deep_sleep_hold_dis();
+    for (int i = 0; i < s_n; i++) {
+        if (!s_ch[i].exp) {
+            gpio_hold_dis(s_ch[i].gpio);
+        }
     }
     restore();
     return ESP_OK;
@@ -303,7 +381,9 @@ static void apply(uint8_t ch, uint16_t value)
     io_ch_t *c = &s_ch[ch];
     if (c->type == MP_CH_RELAY) {
         value = value ? 1 : 0;
-        if (c->exp) {
+        if (c->fx != FX_NONE) {
+            /* 灯效通道只记开关，输出由 fx_tick 在 20ms 内刷上 */
+        } else if (c->exp) {
             esp_io_expander_set_level(s_exp, 1U << c->gpio, EXP_ACTIVE_LOW ? !value : value);
         } else {
             gpio_set_level(c->gpio, RELAY_ACTIVE_LOW ? !value : value);
@@ -379,4 +459,34 @@ void node_io_get(uint16_t value[MP_MAX_CH])
     for (int i = 0; i < s_n; i++) {
         value[i] = s_ch[i].value;
     }
+}
+
+bool node_io_all_off(void)
+{
+    for (int i = 0; i < s_n; i++) {
+        uint16_t v = s_ch[i].value;
+        if (s_ch[i].type == MP_CH_RGB ? (v & MP_RGB_ON) : v != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void node_io_prepare_sleep(void)
+{
+    /* 还没落盘的改动先写进去，醒来 restore 才是最新值 */
+    if (esp_timer_is_active(s_save_timer)) {
+        esp_timer_stop(s_save_timer);
+        save_cb(NULL);
+    }
+    if (s_fx_timer) {
+        esp_timer_stop(s_fx_timer);
+    }
+    /* 深睡时数字引脚默认会浮空，保持住关的电平（低电平触发的继电器要一直拉高）；IO 扩展芯片自己保持 */
+    for (int i = 0; i < s_n; i++) {
+        if (!s_ch[i].exp) {
+            gpio_hold_en(s_ch[i].gpio);
+        }
+    }
+    gpio_deep_sleep_hold_en();
 }

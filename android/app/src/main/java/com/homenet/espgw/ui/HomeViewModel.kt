@@ -359,6 +359,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun unpair(node: Node) =
         action("unpair", JSONObject().put("mac", node.mac), { it.unpair(node.mac) }, "已解绑 ${node.title}")
 
+    fun rename(node: Node, name: String) =
+        action("rename", JSONObject().put("mac", node.mac).put("name", name), { it.rename(node.mac, name) }, "已改名为 $name")
+
     fun pair(seconds: Int) {
         pairLeft = seconds
         action("pair", JSONObject().put("seconds", seconds), { it.pair(seconds) })

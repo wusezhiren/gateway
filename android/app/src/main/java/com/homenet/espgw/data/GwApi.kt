@@ -100,6 +100,10 @@ class GwApi(
         request("POST", "/api/nodes/unpair", JSONObject().put("mac", mac))
     }
 
+    suspend fun rename(mac: String, name: String) {
+        request("POST", "/api/nodes/rename", JSONObject().put("mac", mac).put("name", name))
+    }
+
     /** 让网关下载节点固件并升级该节点，进度看 info.node_ota */
     suspend fun nodeOta(mac: String, url: String, sha256: String) {
         request("POST", "/api/nodes/ota", JSONObject().put("mac", mac).put("url", url).put("sha256", sha256))
@@ -185,6 +189,7 @@ fun gatewayErrorText(error: String): String = when (error) {
     "unauthorized" -> "网关拒绝访问（token 无效，请重新绑定）"
     "offline" -> "节点离线"
     "no_such_node" -> "节点不存在"
+    "bad_name" -> "名字不能为空，最长 16 字节（约 5 个汉字）"
     "busy" -> "网关忙，请稍后重试"
     "not_newer" -> "版本不高于当前版本"
     "wrong_project" -> "固件类型不对"
@@ -202,6 +207,7 @@ fun gatewayErrorText(error: String): String = when (error) {
     "bad_url", "bad_sha256" -> "固件下载信息有误"
     "no_mem" -> "网关内存不足"
     "node_no_response" -> "节点没有响应（节点固件太旧不支持远程升级时，需先用 USB 烧录一次）"
+    "node_asleep" -> "节点在深睡，等了一个睡眠周期也没醒来"
     "node_no_session" -> "节点中途重启，这次升级已取消（节点仍运行旧固件）"
     "node_timeout" -> "给节点传固件中断（节点信号太弱或掉线）"
     "node_begin_failed" -> "节点无法开始升级（上次升级还没确认，稍后再试）"

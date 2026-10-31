@@ -44,6 +44,20 @@ menu "Node"
         bool "PWM output inverted (e.g. LED to VCC)"
         default n
 
+    config NODE_BREATH_GPIOS
+        string "Breathing LED GPIOs, comma separated (empty = none)"
+        default ""
+        help
+            Switch channels: while on, the LED fades in and out (3 s period).
+            Driven by LEDC, polarity follows NODE_PWM_ACTIVE_LOW. Added after the PWM channels.
+
+    config NODE_BLINK_GPIOS
+        string "Slow blink LED GPIOs, comma separated (empty = none)"
+        default ""
+        help
+            Switch channels: while on, the LED blinks 1 s on / 1 s off.
+            Driven by LEDC, polarity follows NODE_PWM_ACTIVE_LOW. Added after the breathing LEDs.
+
     config NODE_RGB_GPIO
         int "WS2812 RGB LED GPIO, -1 for none"
         range -1 48
@@ -59,6 +73,17 @@ menu "Node"
         range -1 48
         default 9 if IDF_TARGET_ESP32C3
         default 0
+
+    config NODE_SLEEP_INTERVAL_S
+        int "Deep sleep while all channels are off, wake every N seconds (0 = never sleep)"
+        range 0 3600
+        default 10
+        help
+            When every channel is off the node deep sleeps and wakes every N seconds to
+            rejoin the gateway, which then delivers commands queued in the meantime, so
+            commands take up to N seconds. Any channel on keeps the node awake. Not within
+            30 s of power-on (time to flash over USB or hold the reset button), while unbound,
+            during an OTA, or while the gateway asks it to stay awake.
 
     config NODE_TEST_NO_JOIN_AFTER_OTA
         bool "After an OTA, never contact the gateway (rollback test only)"

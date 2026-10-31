@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -90,7 +91,7 @@ fun NodesTab(vm: HomeViewModel) {
         NodeDetailDialog(node, onDismiss = { detail = null }, onUnpair = {
             detail = null
             vm.unpair(node)
-        })
+        }, onRename = { vm.rename(node, it) })
     }
 }
 
@@ -260,8 +261,9 @@ private fun ChannelControl(index: Int, ch: Channel, enabled: Boolean, onSet: (In
 }
 
 @Composable
-private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> Unit) {
+private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> Unit, onRename: (String) -> Unit) {
     var confirm by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(node.title) },
@@ -278,11 +280,17 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
         dismissButton = {
-            TextButton(onClick = { confirm = true }) {
-                Text("解绑", color = MaterialTheme.colorScheme.error)
+            Row {
+                TextButton(onClick = { renaming = true }) { Text("改名") }
+                TextButton(onClick = { confirm = true }) {
+                    Text("解绑", color = MaterialTheme.colorScheme.error)
+                }
             }
         },
     )
+    if (renaming) {
+        RenameDialog(node.name, onConfirm = onRename, onDismiss = { renaming = false })
+    }
     if (confirm) {
         ConfirmDialog(
             title = "解绑节点",
@@ -292,6 +300,37 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
             onDismiss = { confirm = false },
         )
     }
+}
+
+/** 节点名存在网关上，最长 16 字节 UTF-8（约 5 个汉字） */
+private const val NAME_MAX_BYTES = 16
+
+@Composable
+private fun RenameDialog(current: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(current) }
+    val trimmed = name.trim()
+    val bytes = trimmed.toByteArray(Charsets.UTF_8).size
+    val ok = bytes in 1..NAME_MAX_BYTES
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("节点改名") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.replace("\n", "") },
+                singleLine = true,
+                isError = !ok,
+                supportingText = { Text("$bytes / $NAME_MAX_BYTES 字节，一个汉字占 3 字节") },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                onConfirm(trimmed)
+            }, enabled = ok && trimmed != current) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 /** 彩灯色块：白光 + 7 个色相（Rgb.HUES 份里的序号） */

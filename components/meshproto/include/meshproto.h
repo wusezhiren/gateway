@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 #include "esp_now.h"
@@ -79,7 +80,12 @@ typedef struct __attribute__((packed)) {
     char         name[MP_NAME_LEN];
     uint8_t      n_ch;
     mp_ch_desc_t ch[MP_MAX_CH];
+    /* 以下为后加字段，老节点不带，网关按帧长判断 */
+    uint16_t     sleep_s;                   /* 节点空闲时深睡，每隔这么多秒醒来入网一次；0 = 常醒 */
 } mp_join_req_t;
+
+/* 老节点的 JOIN_REQ 到 ch 为止 */
+#define MP_JOIN_REQ_MIN_LEN ((int)offsetof(mp_join_req_t, sleep_s))
 
 enum { MP_JOIN_OK = 0 };
 
@@ -100,9 +106,17 @@ typedef struct __attribute__((packed)) {
     uint16_t value[MP_MAX_CH];
 } mp_state_t;
 
+#define MP_HB_F_STAY_AWAKE  0x01    /* HB_ACK：节点暂时不要深睡（网关要给它推升级） */
+
+/* flags 是后加的，老网关只发 hdr，节点按帧长判断 */
 typedef struct __attribute__((packed)) {
     mp_hdr_t hdr;
-} mp_hb_ack_t, mp_leave_t;
+    uint8_t  flags;
+} mp_hb_ack_t;
+
+typedef struct __attribute__((packed)) {
+    mp_hdr_t hdr;
+} mp_leave_t;
 
 typedef struct __attribute__((packed)) {
     mp_hdr_t hdr;

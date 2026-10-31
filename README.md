@@ -61,10 +61,12 @@ idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_ko
 并加到 `tools/release_app.py` 的 `NODE_BUILDS`。0.3.0 以前的节点不支持远程升级，需先 USB 烧一次。
 
 节点 GPIO 在 `idf.py menuconfig` → Node 中配置（默认继电器 GPIO4、5，PWM GPIO6；S3 另有 GPIO48 上的 WS2812 彩灯）。
+节点通道全关时深睡、每 10 秒醒来一次（`NODE_SLEEP_INTERVAL_S`，0 关闭），睡着时发的命令最长 10 秒后生效；
+有通道开着就不睡。深睡时 USB 口会断开，烧录或长按复位键清绑定前先按一下板子的 RST，上电后 30 秒内不睡。
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
 合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，
-继电器 IN 接 GPIO4、VCC 接 3V3；板载 LED D4(GPIO12)、D5(GPIO13) 作两路调光通道。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
+继电器 IN 接 GPIO4、VCC 接 3V3；板载 LED D4(GPIO12) 呼吸灯、D5(GPIO13) 慢闪，各作一路开关。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
 
 ```bash
 idf.py -B build_c3relay -DSDKCONFIG=build_c3relay/sdkconfig -DNODE_PROJECT=esp_c3_relay \

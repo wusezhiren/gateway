@@ -19,11 +19,11 @@ void mp_hdr_init(mp_hdr_t *hdr, mp_type_t type, uint16_t seq)
 static int min_len(int type)
 {
     switch (type) {
-    case MP_JOIN_REQ:  return sizeof(mp_join_req_t);
+    case MP_JOIN_REQ:  return MP_JOIN_REQ_MIN_LEN;
     case MP_JOIN_RSP:  return sizeof(mp_join_rsp_t);
     case MP_HEARTBEAT:
     case MP_STATE:     return sizeof(mp_state_t);
-    case MP_HB_ACK:    return sizeof(mp_hb_ack_t);
+    case MP_HB_ACK:    return sizeof(mp_hdr_t);
     case MP_SET:       return sizeof(mp_set_t);
     case MP_LEAVE:     return sizeof(mp_leave_t);
     case MP_OTA_BEGIN: return sizeof(mp_ota_begin_t);

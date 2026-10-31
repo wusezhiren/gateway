@@ -49,6 +49,7 @@ App 在任何网络下都能控制网关，不需要端口映射或 VPN。
 |---|---|---|
 | `set` | `mac`、`ch`、`value` | `POST /api/nodes/set` |
 | `unpair` | `mac` | `POST /api/nodes/unpair` |
+| `rename` | `mac`, `name` | `POST /api/nodes/rename` |
 | `pair` | `seconds`（0~300） | `POST /api/pair` |
 | `get` | — | 只触发一次 `state` 发布 |
 | `ota` | `url`（https）、`sha256`（64 位十六进制）、`version`（可选，仅显示）、`force`（可选） | 无（远程升级专用，见下） |
@@ -87,6 +88,7 @@ App 从 `version.json` 的 `nodes` 里按**工程名 + 芯片**找到适合该�
 - 立即拒绝：`bad_mac`、`bad_url`、`bad_sha256`、`no_such_node`、`offline`、`busy`（同一时间只升级一个节点，且不和网关升级同时进行）
 - 下载阶段拒绝（节点不受影响）：`wrong_chip` / `wrong_project` / `not_newer` / `not_an_app_image`（读到镜像头就拒绝）、
   `connect_failed` / `download_failed` 等、`sha256_mismatch`
+- 深睡节点先等它醒来（最多 `sleep_s + 10` 秒），等不到报 `node_asleep`
 - 推送阶段：`node_no_response`（节点固件太旧不支持升级，或不在线）、`node_timeout`（传输中断）、
   `node_no_session`（节点中途重启）、`invalid_image_or_signature`、`node_sha256_mismatch` 等，节点继续运行旧固件
 - 重启后：`rolled_back`（新固件 60 秒内没连上网关，节点已回滚）、`no_rejoin`（150 秒没回来）

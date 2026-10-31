@@ -153,6 +153,7 @@ static void add_nodes(cJSON *o)
         cJSON_AddStringToObject(j, "version", n->fw_version);
         cJSON_AddStringToObject(j, "project", n->project);
         cJSON_AddStringToObject(j, "chip", chip_name(n->chip));
+        cJSON_AddNumberToObject(j, "sleep_s", n->sleep_s);
         cJSON *chs = cJSON_AddArrayToObject(j, "ch");
         for (int c = 0; c < n->n_ch && c < MP_MAX_CH; c++) {
             cJSON *ch = cJSON_CreateObject();
@@ -322,6 +323,30 @@ static const char *op_unpair(const cJSON *body)
     return err;
 }
 
+/* 改名：1..16 字节 UTF-8（约 5 个汉字），超长报错而不是截断，免得切坏多字节字符 */
+static const char *op_rename(const cJSON *body)
+{
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(body, "name"));
+    size_t len = name ? strlen(name) : 0;
+    if (len == 0 || len > MP_NAME_LEN) {
+        return "bad_name";
+    }
+    for (size_t i = 0; i < len; i++) {
+        if ((unsigned char)name[i] < 0x20) {
+            return "bad_name";
+        }
+    }
+    int idx;
+    NODES_LOCK();
+    gw_link_snapshot(s_nodes);
+    const char *err = find_node_idx(body, &idx);
+    NODES_UNLOCK();
+    if (!err && gw_link_rename(idx, name) != ESP_OK) {
+        err = "no_such_node";
+    }
+    return err;
+}
+
 static const char *op_pair(const cJSON *body)
 {
     const cJSON *sec = cJSON_GetObjectItem(body, "seconds");
@@ -355,6 +380,8 @@ const char *gw_api_exec(const cJSON *cmd)
         return op_set(cmd);
     } else if (strcmp(op, "unpair") == 0) {
         return op_unpair(cmd);
+    } else if (strcmp(op, "rename") == 0) {
+        return op_rename(cmd);
     } else if (strcmp(op, "pair") == 0) {
         return op_pair(cmd);
     } else if (strcmp(op, "get") == 0) {
@@ -421,6 +448,11 @@ static esp_err_t set_post(httpd_req_t *req)
 static esp_err_t unpair_post(httpd_req_t *req)
 {
     return op_post(req, op_unpair);
+}
+
+static esp_err_t rename_post(httpd_req_t *req)
+{
+    return op_post(req, op_rename);
 }
 
 static esp_err_t node_ota_post(httpd_req_t *req)
@@ -614,6 +646,7 @@ esp_err_t gw_api_register(httpd_handle_t httpd)
         {.uri = "/api/nodes", .method = HTTP_GET, .handler = nodes_get},
         {.uri = "/api/nodes/set", .method = HTTP_POST, .handler = set_post},
         {.uri = "/api/nodes/unpair", .method = HTTP_POST, .handler = unpair_post},
+        {.uri = "/api/nodes/rename", .method = HTTP_POST, .handler = rename_post},
         {.uri = "/api/nodes/ota", .method = HTTP_POST, .handler = node_ota_post},
         {.uri = "/api/pair", .method = HTTP_POST, .handler = pair_post},
         {.uri = "/api/bind", .method = HTTP_POST, .handler = bind_post},

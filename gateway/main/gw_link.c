@@ -1,5 +1,7 @@
 /*
  * 网关侧 ESP-NOW 链路：节点表、配对、命令下发与重传、在线检测。
+ * 深睡节点（JOIN_REQ 带 sleep_s）每次醒来都重新入网：离线判定放宽一个睡眠周期，
+ * SET 重试耗尽不算失败，期望值留着等它下次入网补发。
  * 所有节点表访问都持有 s_lock（递归锁，事件回调里可以再调 snapshot）。
  */
 #include <string.h>
@@ -20,6 +22,7 @@ static const char *TAG = "gw_link";
 
 #define NVS_NS              "gw_nodes"
 #define NVS_KEY             "table_v1"
+#define NVS_KEY_RENAMED     "renamed"   /* 用户改过名的节点位图，单独存，不动 table_v1 的格式 */
 #define SET_TIMEOUT_US      (300 * 1000)
 #define SET_MAX_TRIES       3
 #define OFFLINE_TIMEOUT_US  ((int64_t)(MP_HB_MISS_MAX * MP_HB_INTERVAL_MS + 1000) * 1000)
@@ -59,6 +62,7 @@ static QueueHandle_t s_rx_q;
 static gw_event_cb_t s_event_cb;
 static int64_t s_pair_until_us;
 static uint16_t s_seq;
+static uint32_t s_renamed;  /* BIT(idx)：名字是用户起的，入网时不用节点上报的覆盖 */
 
 #define LOCK()   xSemaphoreTakeRecursive(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGiveRecursive(s_lock)
@@ -119,6 +123,9 @@ static void save_table(void)
     if (err == ESP_OK) {
         err = nvs_set_blob(h, NVS_KEY, buf, sizeof(buf));
         if (err == ESP_OK) {
+            err = nvs_set_u32(h, NVS_KEY_RENAMED, s_renamed);
+        }
+        if (err == ESP_OK) {
             err = nvs_commit(h);
         }
         nvs_close(h);
@@ -138,6 +145,9 @@ static void load_table(void)
         return;
     }
     esp_err_t err = nvs_get_blob(h, NVS_KEY, buf, &len);
+    if (nvs_get_u32(h, NVS_KEY_RENAMED, &s_renamed) != ESP_OK) {
+        s_renamed = 0;
+    }
     nvs_close(h);
     if (err != ESP_OK || len != sizeof(buf)) {
         if (err == ESP_OK) {
@@ -232,6 +242,7 @@ static void handle_join(const rx_msg_t *m)
             return;
         }
         is_new = true;
+        s_renamed &= ~BIT(idx);
         memset(&s_nodes[idx], 0, sizeof(s_nodes[idx]));
         s_nodes[idx].used = true;
         memcpy(s_nodes[idx].mac, m->src, 6);
@@ -241,10 +252,15 @@ static void handle_join(const rx_msg_t *m)
     char name[MP_NAME_LEN + 1];
     char ver[MP_VER_LEN + 1];
     char proj[MP_PROJ_LEN + 1];
-    copy_field(name, req->name, MP_NAME_LEN);
+    if (s_renamed & BIT(idx)) {
+        strcpy(name, n->name);
+    } else {
+        copy_field(name, req->name, MP_NAME_LEN);
+    }
     copy_field(ver, req->fw_version, MP_VER_LEN);
     copy_field(proj, req->project, MP_PROJ_LEN);
     uint8_t n_ch = req->n_ch > MP_MAX_CH ? MP_MAX_CH : req->n_ch;
+    uint16_t sleep_s = m->len >= sizeof(mp_join_req_t) ? req->sleep_s : 0;
 
     bool layout_changed = is_new || n->n_ch != n_ch ||
                           memcmp(n->ch, req->ch, sizeof(mp_ch_desc_t) * n_ch) != 0;
@@ -265,8 +281,11 @@ static void handle_join(const rx_msg_t *m)
         n->chip = req->chip;
         save_table();
     }
+    /* 深睡节点每个周期都入网一次，没变化就不打日志、不发事件 */
+    bool quiet = !changed && n->online && sleep_s;
     n->resync = true;
     n->joins++;
+    n->sleep_s = sleep_s;
 
     if (mp_peer_upsert(n->mac, true) != ESP_OK) {
         ESP_LOGE(TAG, "add peer " MACSTR " failed", MAC2STR(n->mac));
@@ -286,10 +305,14 @@ static void handle_join(const rx_msg_t *m)
     memcpy(rsp.target, m->src, 6);
     esp_now_send(MP_BROADCAST, (const uint8_t *)&rsp, sizeof(rsp));
 
-    ESP_LOGI(TAG, "%s node %d " MACSTR " \"%s\" %s v%s, %d ch, rssi %d",
-             is_new ? "paired" : "rejoined", idx, MAC2STR(n->mac), n->name, n->project,
-             n->fw_version, n->n_ch, m->rssi);
-    emit(GW_EV_NODE_JOINED, idx);
+    if (quiet) {
+        ESP_LOGD(TAG, "node %d woke up, rssi %d", idx, m->rssi);
+    } else {
+        ESP_LOGI(TAG, "%s node %d " MACSTR " \"%s\" %s v%s, %d ch, rssi %d, sleep %u s",
+                 is_new ? "paired" : "rejoined", idx, MAC2STR(n->mac), n->name, n->project,
+                 n->fw_version, n->n_ch, m->rssi, sleep_s);
+        emit(GW_EV_NODE_JOINED, idx);
+    }
     UNLOCK();
 }
 
@@ -347,7 +370,7 @@ static void handle_state(const rx_msg_t *m, int type)
     }
 
     if (type == MP_HEARTBEAT) {
-        mp_hb_ack_t ack;
+        mp_hb_ack_t ack = {.flags = n->stay_awake ? MP_HB_F_STAY_AWAKE : 0};
         mp_hdr_init(&ack.hdr, MP_HB_ACK, st->hdr.seq);
         esp_now_send(n->mac, (const uint8_t *)&ack, sizeof(ack));
     }
@@ -371,7 +394,7 @@ static void periodic(void)
         if (!n->used || !n->online) {
             continue;
         }
-        if (now - n->last_seen_us > OFFLINE_TIMEOUT_US) {
+        if (now - n->last_seen_us > OFFLINE_TIMEOUT_US + (int64_t)n->sleep_s * 1000000) {
             n->online = false;
             clear_pending(i);
             ESP_LOGW(TAG, "node %d \"%s\" offline", i, n->name);
@@ -385,8 +408,12 @@ static void periodic(void)
             }
             if (p->tries >= SET_MAX_TRIES) {
                 p->active = false;
-                ESP_LOGW(TAG, "node %d ch %d SET %u not acked", i, ch, p->value);
-                emit(GW_EV_SET_FAILED, i);
+                if (n->sleep_s) {
+                    ESP_LOGI(TAG, "node %d asleep, ch %d = %u queued until it wakes", i, ch, p->value);
+                } else {
+                    ESP_LOGW(TAG, "node %d ch %d SET %u not acked", i, ch, p->value);
+                    emit(GW_EV_SET_FAILED, i);
+                }
             } else {
                 send_set(i, ch);
             }
@@ -526,11 +553,43 @@ esp_err_t gw_link_unpair(int idx)
     esp_now_del_peer(n->mac);
     ESP_LOGI(TAG, "unpaired node %d " MACSTR, idx, MAC2STR(n->mac));
     memset(n, 0, sizeof(*n));
+    s_renamed &= ~BIT(idx);
     clear_pending(idx);
     save_table();
     emit(GW_EV_NODE_REMOVED, idx);
     UNLOCK();
     return ESP_OK;
+}
+
+esp_err_t gw_link_rename(int idx, const char *name)
+{
+    size_t len = name ? strlen(name) : 0;
+    if (idx < 0 || idx >= GW_MAX_NODES || len == 0 || len > MP_NAME_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    LOCK();
+    gw_node_t *n = &s_nodes[idx];
+    if (!n->used) {
+        UNLOCK();
+        return ESP_ERR_NOT_FOUND;
+    }
+    strcpy(n->name, name);
+    s_renamed |= BIT(idx);
+    save_table();
+    ESP_LOGI(TAG, "renamed node %d " MACSTR " to \"%s\"", idx, MAC2STR(n->mac), n->name);
+    emit(GW_EV_NODE_STATE, idx);
+    UNLOCK();
+    return ESP_OK;
+}
+
+void gw_link_stay_awake(const uint8_t mac[6], bool on)
+{
+    LOCK();
+    int idx = find_node(mac);
+    if (idx >= 0) {
+        s_nodes[idx].stay_awake = on;
+    }
+    UNLOCK();
 }
 
 void gw_link_pair(uint32_t seconds)

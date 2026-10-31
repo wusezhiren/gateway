@@ -494,24 +494,28 @@ static const char *wait_rejoin(const uint8_t mac[6], uint32_t joins, const char 
     return "no_rejoin";
 }
 
-/* 深睡节点：要求它保持唤醒，等它下次醒来入网；out 更新为醒来后的节点信息 */
+/*
+ * 深睡 / 省电节点：要求它保持唤醒（深睡节点不睡、省电节点一直收），等它下一次入网或心跳拿到 HB_ACK 里的标志；
+ * out 更新为之后的节点信息
+ */
 static const char *wake_node(const uint8_t mac[6], gw_node_t *out)
 {
     gw_node_t node;
     if (!gw_link_get_node(mac, &node, NULL)) {
         return "no_such_node";
     }
-    uint32_t joins = node.joins;
-    int64_t deadline = esp_timer_get_time() + ((int64_t)node.sleep_s + 10) * 1000000;
-    ESP_LOGI(TAG, "node " MACSTR " sleeps %u s, waiting for it to wake", MAC2STR(mac), node.sleep_s);
+    int64_t t0 = esp_timer_get_time();
+    int64_t deadline = t0 + ((int64_t)node.sleep_s + MP_HB_INTERVAL_MS / 1000 + 10) * 1000000;
+    ESP_LOGI(TAG, "node " MACSTR " sleeps %u s / rx window %u/%u ms, asking it to stay awake", MAC2STR(mac),
+             node.sleep_s, node.lp_window_ms, node.lp_interval_ms);
     gw_link_stay_awake(mac, true);
     while (esp_timer_get_time() < deadline) {
         vTaskDelay(pdMS_TO_TICKS(100));
         if (!gw_link_get_node(mac, &node, NULL)) {
             return "no_such_node";
         }
-        if (node.joins != joins) {
-            /* 等它发完首个心跳、收到带保持唤醒标志的 HB_ACK */
+        if (node.last_seen_us > t0) {
+            /* 深睡节点入网后紧接着发首个心跳；等它收到带保持唤醒标志的 HB_ACK */
             vTaskDelay(pdMS_TO_TICKS(500));
             return find_node(mac, out);
         }
@@ -547,7 +551,7 @@ static const char *run_job(const job_t *job)
     char version[MP_VER_LEN + 1];
     strlcpy(version, ((const esp_app_desc_t *)(head + DESC_OFFSET))->version, sizeof(version));
     err = find_node(job->mac, &node);   /* 下载期间可能掉线 */
-    if (!err && node.sleep_s) {
+    if (!err && (node.sleep_s || node.lp_interval_ms)) {
         err = wake_node(job->mac, &node);
     }
     if (err) {

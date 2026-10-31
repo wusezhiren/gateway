@@ -18,10 +18,10 @@
 
 | type | 名称 | 方向 | 传输 | 内容 |
 |---|---|---|---|---|
-| 1 | JOIN_REQ | 节点 → 广播 | 明文 | 固件版本、工程名、芯片型号、节点名、通道描述、深睡周期 sleep_s（后加，老节点不带） |
+| 1 | JOIN_REQ | 节点 → 广播 | 明文 | 固件版本、工程名、芯片型号、节点名、通道描述；后加（老节点不带）：深睡周期 sleep_s、接收窗口 lp_interval_ms / lp_window_ms |
 | 2 | JOIN_RSP | 网关 → 广播 | 明文 | target（节点 MAC）、status、网关信道、心跳周期；seq 回填 JOIN_REQ.seq |
 | 3 | HEARTBEAT | 节点 → 网关 | 加密单播 | 运行时间、全部通道值 |
-| 4 | HB_ACK | 网关 → 节点 | 加密单播 | seq 回填 HEARTBEAT.seq；flags（后加，bit0 = 暂不深睡） |
+| 4 | HB_ACK | 网关 → 节点 | 加密单播 | seq 回填 HEARTBEAT.seq；flags（后加，bit0 = 暂不深睡、一直收） |
 | 5 | SET | 网关 → 节点 | 加密单播 | 通道号、值 |
 | 6 | STATE | 节点 → 网关 | 加密单播 | 同 HEARTBEAT；ack_seq = 被应答 SET 的 seq |
 | 7 | LEAVE | 网关 → 节点 | 加密单播 | 解除配对 |
@@ -95,6 +95,18 @@ RGB 通道的 16 位取值（`MP_RGB_*` 宏）：
   （SET 先于 HB_ACK 发出，节点开了通道就不睡了）；没变化的周期性入网不打日志、不发事件。
 - 升级深睡节点：网关先置 stay_awake，等节点下次入网再推送，结束后清除。
 - 兼容：两个新字段都按帧长判断，新旧网关、节点可以混用（老网关下的新节点照样睡，但命令可能报失败）。
+
+### 省电（接收窗口）
+
+- 节点 `NODE_LOW_POWER`：入网后 ESP-NOW 每 `NODE_LP_INTERVAL_MS`（默认 500）只开 `NODE_LP_WINDOW_MS`（默认 50）接收，
+  其余时间 CPU 自动浅睡；发送随时可以。命令延迟不超过一个周期。
+- 心跳等到窗口开始（`WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START`）再发，HB_ACK 落在窗口里。
+- 扫描、升级中、上电 30 秒内、HB_ACK 带 `MP_HB_F_STAY_AWAKE` 后 30 秒内一直收。
+- PWM / 灯效开着时持 `ESP_PM_APB_FREQ_MAX` 锁，不浅睡也不降频（LEDC 时钟），只省射频；灯效定时器只在灯效开着时跑。
+- 网关：SET 每半个窗口重发一次，重发到覆盖一整个周期（500/50 时每 25ms 一次、最多 22 次），link 任务 10ms 一轮；
+  升级前同样先置 stay_awake，等节点下一个心跳后再推。
+- LEAVE 只发一次，省电节点可能收不到，此时按“节点离线时解绑”处理（长按复位键）。
+- 可以和深睡同时开：有通道开着时省电，全关时深睡。
 
 ### 控制
 

@@ -82,10 +82,14 @@ typedef struct __attribute__((packed)) {
     mp_ch_desc_t ch[MP_MAX_CH];
     /* 以下为后加字段，老节点不带，网关按帧长判断 */
     uint16_t     sleep_s;                   /* 节点空闲时深睡，每隔这么多秒醒来入网一次；0 = 常醒 */
+    uint16_t     lp_interval_ms;            /* ESP-NOW 省电：每隔这么多毫秒开一次接收窗口；0 = 一直收 */
+    uint8_t      lp_window_ms;              /* 接收窗口长度 */
 } mp_join_req_t;
 
-/* 老节点的 JOIN_REQ 到 ch 为止 */
+/* 老节点的 JOIN_REQ 到 ch 为止；带不带后加字段用 MP_JOIN_REQ_HAS 判断 */
 #define MP_JOIN_REQ_MIN_LEN ((int)offsetof(mp_join_req_t, sleep_s))
+#define MP_JOIN_REQ_HAS(len, field) \
+    ((len) >= (int)(offsetof(mp_join_req_t, field) + sizeof(((mp_join_req_t *)0)->field)))
 
 enum { MP_JOIN_OK = 0 };
 
@@ -106,7 +110,7 @@ typedef struct __attribute__((packed)) {
     uint16_t value[MP_MAX_CH];
 } mp_state_t;
 
-#define MP_HB_F_STAY_AWAKE  0x01    /* HB_ACK：节点暂时不要深睡（网关要给它推升级） */
+#define MP_HB_F_STAY_AWAKE  0x01    /* HB_ACK：节点暂时不要深睡、不要关接收（网关要给它推升级） */
 
 /* flags 是后加的，老网关只发 hdr，节点按帧长判断 */
 typedef struct __attribute__((packed)) {

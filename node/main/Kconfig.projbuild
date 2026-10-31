@@ -85,6 +85,31 @@ menu "Node"
             30 s of power-on (time to flash over USB or hold the reset button), while unbound,
             during an OTA, or while the gateway asks it to stay awake.
 
+    config NODE_LOW_POWER
+        bool "ESP-NOW power saving with automatic light sleep"
+        default n
+        select PM_ENABLE
+        select FREERTOS_USE_TICKLESS_IDLE
+        help
+            Once joined, the radio only listens for NODE_LP_WINDOW_MS out of every
+            NODE_LP_INTERVAL_MS and the CPU light sleeps in between, so commands take up to
+            one interval. The gateway repeats SET every half window for a whole interval.
+            Heartbeats are sent at the start of a window so the ACK gets through. While a
+            PWM / effect LED is on the node stays out of light sleep (LEDC needs its clock).
+            The USB console stops working once light sleep starts.
+
+    config NODE_LP_INTERVAL_MS
+        int "Receive window interval (ms)"
+        depends on NODE_LOW_POWER
+        range 100 5000
+        default 500
+
+    config NODE_LP_WINDOW_MS
+        int "Receive window length (ms)"
+        depends on NODE_LOW_POWER
+        range 20 200
+        default 50
+
     config NODE_TEST_NO_JOIN_AFTER_OTA
         bool "After an OTA, never contact the gateway (rollback test only)"
         default n

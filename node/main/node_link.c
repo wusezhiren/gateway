@@ -7,6 +7,8 @@
  * 已绑定网关时只接受该网关的应答，收到 LEAVE 或长按复位键才清除绑定。
  * 深睡（NODE_SLEEP_INTERVAL_S）：通道全关时收到 HB_ACK 或找不到网关就深睡，定时醒来重新开机入网，
  * 网关在入网后的首个心跳里补发睡着期间的命令（SET 先于 HB_ACK 到达，开了灯就不再睡）。
+ * 省电（NODE_LOW_POWER）：入网后每个周期只开一小段接收窗口，其余时间 CPU 自动浅睡；
+ * 心跳在窗口开始时发，HB_ACK 才收得到。扫描、升级、网关要求保持唤醒时一直收。
  */
 #include <string.h>
 #include "esp_app_desc.h"
@@ -16,11 +18,13 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_ota_ops.h"
+#include "esp_pm.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "sdkconfig.h"
@@ -57,7 +61,11 @@ static uint8_t s_gw_ch;
 static uint16_t s_hb_ms = MP_HB_INTERVAL_MS;
 static bool s_pending_verify;   /* 运行的是 OTA 后尚未确认的新固件 */
 static esp_timer_handle_t s_validate_timer;
-static int64_t s_stay_until_us;  /* 这之前不深睡 */
+static int64_t s_stay_until_us;  /* 这之前不深睡、不开省电 */
+#if CONFIG_NODE_LOW_POWER
+static SemaphoreHandle_t s_window_sem;  /* 接收窗口开始 */
+static bool s_lp_on;
+#endif
 
 static uint16_t next_seq(void)
 {
@@ -147,6 +155,10 @@ static bool try_join(uint8_t channel)
     memcpy(req.name, s_name, MP_NAME_LEN);
     memcpy(req.ch, s_desc, sizeof(req.ch));
     req.sleep_s = CONFIG_NODE_SLEEP_INTERVAL_S;
+#if CONFIG_NODE_LOW_POWER
+    req.lp_interval_ms = CONFIG_NODE_LP_INTERVAL_MS;
+    req.lp_window_ms = CONFIG_NODE_LP_WINDOW_MS;
+#endif
     esp_now_send(MP_BROADCAST, (const uint8_t *)&req, sizeof(req));
 
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(JOIN_WAIT_MS);
@@ -186,6 +198,34 @@ static bool try_join(uint8_t channel)
     }
 }
 
+/* 入网后且没有升级、网关没要求保持唤醒时才只开接收窗口，否则一直收 */
+static void lp_update(bool joined)
+{
+#if CONFIG_NODE_LOW_POWER
+    bool on = joined && !node_ota_active() && esp_timer_get_time() >= s_stay_until_us;
+    if (on != s_lp_on) {
+        s_lp_on = on;
+        esp_now_set_wake_window(on ? CONFIG_NODE_LP_WINDOW_MS : UINT16_MAX);
+        if (on) {
+            ESP_LOGI(TAG, "rx window %d ms every %d ms", CONFIG_NODE_LP_WINDOW_MS, CONFIG_NODE_LP_INTERVAL_MS);
+        } else {
+            ESP_LOGI(TAG, "rx always on");
+        }
+    }
+#endif
+}
+
+/* 省电时等到下一个接收窗口开始再发，网关的应答才落在窗口里 */
+static void wait_rx_window(void)
+{
+#if CONFIG_NODE_LOW_POWER
+    if (s_lp_on) {
+        xSemaphoreTake(s_window_sem, 0);
+        xSemaphoreTake(s_window_sem, pdMS_TO_TICKS(CONFIG_NODE_LP_INTERVAL_MS + 100));
+    }
+#endif
+}
+
 /* 条件满足就深睡，醒来从头开机，不返回 */
 static void maybe_sleep(void)
 {
@@ -204,6 +244,7 @@ static void maybe_sleep(void)
 
 static void scan_until_joined(void)
 {
+    lp_update(false);
     for (;;) {
         if (s_bound && try_join(s_gw_ch)) {
             return;
@@ -230,12 +271,14 @@ static void run_joined(void)
     rx_msg_t m;
 
     for (;;) {
+        lp_update(true);
         TickType_t now = xTaskGetTickCount();
         if ((int32_t)(next_hb - now) <= 0) {
             if (missed >= MP_HB_MISS_MAX) {
                 ESP_LOGW(TAG, "gateway lost (%d heartbeats unanswered)", missed);
                 return;
             }
+            wait_rx_window();
             send_state(MP_HEARTBEAT, 0);
             missed++;
             next_hb += pdMS_TO_TICKS(s_hb_ms);
@@ -331,6 +374,13 @@ static void check_pending_verify(void)
              VALIDATE_TIMEOUT_US / 1000000);
 }
 
+#if CONFIG_NODE_LOW_POWER
+static void window_start_cb(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    xSemaphoreGive(s_window_sem);
+}
+#endif
+
 static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
     rx_msg_t m;
@@ -357,8 +407,24 @@ esp_err_t node_link_start(const mp_ch_desc_t desc[MP_MAX_CH], uint8_t n_ch)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+#if CONFIG_NODE_LOW_POWER
+    s_window_sem = xSemaphoreCreateBinary();
+    const esp_pm_config_t pm = {
+        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        .min_freq_mhz = 40,     /* XTAL */
+        .light_sleep_enable = true,
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_CONNECTIONLESS_MODULE_WAKE_INTERVAL_START,
+                                               window_start_cb, NULL));
+#endif
     ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_NODE_LOW_POWER
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+    ESP_ERROR_CHECK(esp_wifi_connectionless_module_set_wake_interval(CONFIG_NODE_LP_INTERVAL_MS));
+#else
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#endif
     esp_wifi_get_mac(WIFI_IF_STA, s_my_mac);
     snprintf(s_name, sizeof(s_name), "%s-%02X%02X", CONFIG_NODE_NAME, s_my_mac[4], s_my_mac[5]);
 

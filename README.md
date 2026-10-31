@@ -63,6 +63,8 @@ idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_ko
 节点 GPIO 在 `idf.py menuconfig` → Node 中配置（默认继电器 GPIO4、5，PWM GPIO6；S3 另有 GPIO48 上的 WS2812 彩灯）。
 节点通道全关时深睡、每 10 秒醒来一次（`NODE_SLEEP_INTERVAL_S`，0 关闭），睡着时发的命令最长 10 秒后生效；
 有通道开着就不睡。深睡时 USB 口会断开，烧录或长按复位键清绑定前先按一下板子的 RST，上电后 30 秒内不睡。
+也可以改用省电（`NODE_LOW_POWER`）：每 500ms 开 50ms 接收窗口、其余时间浅睡，命令延迟不超过 0.5 秒；
+C3 继电器节点用的是这种（关了深睡）。浅睡后 USB 串口日志看不到，见 [docs/protocol.md](docs/protocol.md#省电接收窗口)。
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
 合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，

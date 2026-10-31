@@ -31,6 +31,8 @@ typedef struct {
     bool         resync;                /* 刚入网，等待首个状态上报做比对 */
     uint32_t     joins;                 /* 本次开机以来的入网次数，升级时据此判断节点已重启 */
     uint16_t     sleep_s;               /* 节点深睡周期，0 = 常醒；睡着期间的命令等它醒来入网时补发 */
+    uint16_t     lp_interval_ms;        /* 节点 ESP-NOW 省电：每隔多少毫秒开一次接收窗口，0 = 一直收 */
+    uint8_t      lp_window_ms;          /* 接收窗口长度，SET 按半个窗口的间隔重发、覆盖一整个周期 */
     bool         stay_awake;            /* HB_ACK 里要求节点暂不深睡 */
 } gw_node_t;
 

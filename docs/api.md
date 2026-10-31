@@ -63,7 +63,7 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 {"pair_left": 0,
  "nodes": [{"mac": "aa:bb:cc:dd:ee:ff", "name": "relay-1", "online": true, "rssi": -48,
             "uptime_s": 3600, "last_seen_s": 2, "version": "0.1.0", "project": "esp_s3_node",
-            "chip": "esp32c3", "sleep_s": 0,
+            "chip": "esp32c3", "sleep_s": 0, "rx_interval_ms": 0, "rx_window_ms": 0,
             "ch": [{"type": "relay", "max": 1, "value": 1},
                    {"type": "pwm", "max": 1023, "value": 512, "desired": 600}]}]}
 ```
@@ -73,6 +73,7 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 - `last_seen_s`：距最后一次收到该节点消息的秒数，从未收到为 -1
 - `sleep_s`：节点通道全关时深睡、每隔这么多秒醒来一次，0 为常醒（老节点、网关重启后节点还没入网时也是 0）。
   深睡节点的 `set` 同样返回 `ok`，命令在节点下次醒来时生效，最长延迟 `sleep_s` 秒
+- `rx_interval_ms` / `rx_window_ms`：省电节点每隔多少毫秒开一次多长的接收窗口，0 为一直收；命令最长延迟 `rx_interval_ms`
 
 ### `POST /api/nodes/set`
 

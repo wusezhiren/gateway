@@ -154,6 +154,8 @@ static void add_nodes(cJSON *o)
         cJSON_AddStringToObject(j, "project", n->project);
         cJSON_AddStringToObject(j, "chip", chip_name(n->chip));
         cJSON_AddNumberToObject(j, "sleep_s", n->sleep_s);
+        cJSON_AddNumberToObject(j, "rx_interval_ms", n->lp_interval_ms);
+        cJSON_AddNumberToObject(j, "rx_window_ms", n->lp_window_ms);
         cJSON *chs = cJSON_AddArrayToObject(j, "ch");
         for (int c = 0; c < n->n_ch && c < MP_MAX_CH; c++) {
             cJSON *ch = cJSON_CreateObject();

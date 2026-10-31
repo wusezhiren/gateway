@@ -5,6 +5,7 @@
 #include "driver/ledc.h"
 #include "esp_io_expander_tca9554.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_timer.h"
 #include "led_strip.h"
 #include "nvs.h"
@@ -61,10 +62,15 @@ static esp_timer_handle_t s_save_timer;
 static esp_timer_handle_t s_fx_timer;
 static int s_ledc_n;    /* 已分配的 LEDC 通道数，PWM 和灯效共用 LEDC_TIMER_0 */
 static esp_io_expander_handle_t s_exp;
+#if CONFIG_PM_ENABLE
+static esp_pm_lock_handle_t s_pm_lock;  /* LEDC 输出期间持有：自动浅睡和降频都会让 PWM 停掉或变频 */
+static bool s_pm_held;
+#endif
 static led_strip_handle_t s_strip;
 
 static void save_cb(void *arg);
 static void restore(void);
+static void update_power(void);
 
 /* 落盘格式：带通道类型，布局变了（改了 GPIO 配置）就不恢复 */
 typedef struct __attribute__((packed)) {
@@ -331,10 +337,7 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
     }
     if (has_fx) {
         const esp_timer_create_args_t fx_args = {.callback = fx_tick, .name = "io_fx"};
-        esp_err_t err = esp_timer_create(&fx_args, &s_fx_timer);
-        if (err == ESP_OK) {
-            err = esp_timer_start_periodic(s_fx_timer, FX_TICK_US);
-        }
+        esp_err_t err = esp_timer_create(&fx_args, &s_fx_timer);   /* 有灯效开着才跑，见 update_power */
         if (err != ESP_OK) {
             return err;
         }
@@ -365,6 +368,12 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
     if (err != ESP_OK) {
         return err;
     }
+#if CONFIG_PM_ENABLE
+    err = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "node_io", &s_pm_lock);
+    if (err != ESP_OK) {
+        return err;
+    }
+#endif
     /* 深睡醒来：引脚已按关的电平配好，再解除睡前的保持 */
     gpio_deep_sleep_hold_dis();
     for (int i = 0; i < s_n; i++) {
@@ -373,6 +382,7 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
         }
     }
     restore();
+    update_power();
     return ESP_OK;
 }
 
@@ -382,7 +392,11 @@ static void apply(uint8_t ch, uint16_t value)
     if (c->type == MP_CH_RELAY) {
         value = value ? 1 : 0;
         if (c->fx != FX_NONE) {
-            /* 灯效通道只记开关，输出由 fx_tick 在 20ms 内刷上 */
+            /* 灯效通道只记开关，输出由 fx_tick 在 20ms 内刷上；关的时候定时器可能已停，直接灭 */
+            if (!value) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, c->ledc_ch, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, c->ledc_ch);
+            }
         } else if (c->exp) {
             esp_io_expander_set_level(s_exp, 1U << c->gpio, EXP_ACTIVE_LOW ? !value : value);
         } else {
@@ -447,6 +461,7 @@ esp_err_t node_io_set(uint8_t ch, uint16_t value)
         return ESP_ERR_INVALID_ARG;
     }
     apply(ch, value);
+    update_power();
     ESP_LOGI(TAG, "ch%d = %u", ch, s_ch[ch].value);
     esp_timer_stop(s_save_timer);
     esp_timer_start_once(s_save_timer, SAVE_DELAY_US);
@@ -459,6 +474,37 @@ void node_io_get(uint16_t value[MP_MAX_CH])
     for (int i = 0; i < s_n; i++) {
         value[i] = s_ch[i].value;
     }
+}
+
+/* 灯效定时器只在有灯效开着时跑（否则每 20ms 把 CPU 从浅睡叫醒）；LEDC 有输出时不让浅睡 */
+static void update_power(void)
+{
+    bool fx_on = false, ledc_on = false;
+    for (int i = 0; i < s_n; i++) {
+        if (s_ch[i].ledc_ch >= 0 && s_ch[i].value) {
+            ledc_on = true;
+            fx_on |= s_ch[i].fx != FX_NONE;
+        }
+    }
+    if (s_fx_timer && fx_on != esp_timer_is_active(s_fx_timer)) {
+        if (fx_on) {
+            esp_timer_start_periodic(s_fx_timer, FX_TICK_US);
+        } else {
+            esp_timer_stop(s_fx_timer);
+        }
+    }
+#if CONFIG_PM_ENABLE
+    if (ledc_on != s_pm_held) {
+        if (ledc_on) {
+            esp_pm_lock_acquire(s_pm_lock);
+        } else {
+            esp_pm_lock_release(s_pm_lock);
+        }
+        s_pm_held = ledc_on;
+    }
+#else
+    (void)ledc_on;
+#endif
 }
 
 bool node_io_all_off(void)
@@ -479,7 +525,7 @@ void node_io_prepare_sleep(void)
         esp_timer_stop(s_save_timer);
         save_cb(NULL);
     }
-    if (s_fx_timer) {
+    if (s_fx_timer && esp_timer_is_active(s_fx_timer)) {
         esp_timer_stop(s_fx_timer);
     }
     /* 深睡时数字引脚默认会浮空，保持住关的电平（低电平触发的继电器要一直拉高）；IO 扩展芯片自己保持 */

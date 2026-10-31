@@ -2,6 +2,7 @@
  * 网关侧 ESP-NOW 链路：节点表、配对、命令下发与重传、在线检测。
  * 深睡节点（JOIN_REQ 带 sleep_s）每次醒来都重新入网：离线判定放宽一个睡眠周期，
  * SET 重试耗尽不算失败，期望值留着等它下次入网补发。
+ * 省电节点（JOIN_REQ 带 lp_interval_ms）只在接收窗口里收得到：SET 每半个窗口重发一次，持续一个周期多。
  * 所有节点表访问都持有 s_lock（递归锁，事件回调里可以再调 snapshot）。
  */
 #include <string.h>
@@ -26,7 +27,7 @@ static const char *TAG = "gw_link";
 #define SET_TIMEOUT_US      (300 * 1000)
 #define SET_MAX_TRIES       3
 #define OFFLINE_TIMEOUT_US  ((int64_t)(MP_HB_MISS_MAX * MP_HB_INTERVAL_MS + 1000) * 1000)
-#define TICK_MS             100
+#define TICK_MS             10      /* 省电节点的 SET 重发间隔只有几十毫秒 */
 
 typedef struct {
     uint8_t  src[6];
@@ -185,6 +186,23 @@ static uint8_t current_channel(void)
     return ch;
 }
 
+static int64_t set_timeout_us(const gw_node_t *n)
+{
+    if (n->lp_interval_ms && n->lp_window_ms) {
+        int ms = n->lp_window_ms / 2;
+        return (ms < TICK_MS ? TICK_MS : ms) * 1000LL;
+    }
+    return SET_TIMEOUT_US;
+}
+
+static int set_max_tries(const gw_node_t *n)
+{
+    if (n->lp_interval_ms && n->lp_window_ms) {
+        return n->lp_interval_ms * 1000LL / set_timeout_us(n) + 2;
+    }
+    return SET_MAX_TRIES;
+}
+
 static void send_set(int idx, uint8_t ch)
 {
     pending_t *p = &s_pending[idx][ch];
@@ -193,7 +211,7 @@ static void send_set(int idx, uint8_t ch)
     msg.ch = ch;
     msg.value = p->value;
     p->tries++;
-    p->next_us = esp_timer_get_time() + SET_TIMEOUT_US;
+    p->next_us = esp_timer_get_time() + set_timeout_us(&s_nodes[idx]);
     esp_err_t err = esp_now_send(s_nodes[idx].mac, (const uint8_t *)&msg, sizeof(msg));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "send SET to node %d failed: %s", idx, esp_err_to_name(err));
@@ -260,7 +278,8 @@ static void handle_join(const rx_msg_t *m)
     copy_field(ver, req->fw_version, MP_VER_LEN);
     copy_field(proj, req->project, MP_PROJ_LEN);
     uint8_t n_ch = req->n_ch > MP_MAX_CH ? MP_MAX_CH : req->n_ch;
-    uint16_t sleep_s = m->len >= sizeof(mp_join_req_t) ? req->sleep_s : 0;
+    uint16_t sleep_s = MP_JOIN_REQ_HAS(m->len, sleep_s) ? req->sleep_s : 0;
+    bool lp = MP_JOIN_REQ_HAS(m->len, lp_window_ms);
 
     bool layout_changed = is_new || n->n_ch != n_ch ||
                           memcmp(n->ch, req->ch, sizeof(mp_ch_desc_t) * n_ch) != 0;
@@ -286,6 +305,8 @@ static void handle_join(const rx_msg_t *m)
     n->resync = true;
     n->joins++;
     n->sleep_s = sleep_s;
+    n->lp_interval_ms = lp ? req->lp_interval_ms : 0;
+    n->lp_window_ms = lp ? req->lp_window_ms : 0;
 
     if (mp_peer_upsert(n->mac, true) != ESP_OK) {
         ESP_LOGE(TAG, "add peer " MACSTR " failed", MAC2STR(n->mac));
@@ -308,9 +329,9 @@ static void handle_join(const rx_msg_t *m)
     if (quiet) {
         ESP_LOGD(TAG, "node %d woke up, rssi %d", idx, m->rssi);
     } else {
-        ESP_LOGI(TAG, "%s node %d " MACSTR " \"%s\" %s v%s, %d ch, rssi %d, sleep %u s",
+        ESP_LOGI(TAG, "%s node %d " MACSTR " \"%s\" %s v%s, %d ch, rssi %d, sleep %u s, rx window %u/%u ms",
                  is_new ? "paired" : "rejoined", idx, MAC2STR(n->mac), n->name, n->project,
-                 n->fw_version, n->n_ch, m->rssi, sleep_s);
+                 n->fw_version, n->n_ch, m->rssi, sleep_s, n->lp_window_ms, n->lp_interval_ms);
         emit(GW_EV_NODE_JOINED, idx);
     }
     UNLOCK();
@@ -406,7 +427,7 @@ static void periodic(void)
             if (!p->active || now < p->next_us) {
                 continue;
             }
-            if (p->tries >= SET_MAX_TRIES) {
+            if (p->tries >= set_max_tries(n)) {
                 p->active = false;
                 if (n->sleep_s) {
                     ESP_LOGI(TAG, "node %d asleep, ch %d = %u queued until it wakes", i, ch, p->value);

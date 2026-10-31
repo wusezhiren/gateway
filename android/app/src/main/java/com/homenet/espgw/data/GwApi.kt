@@ -23,6 +23,7 @@ class GwApi(
     private val host: String,
     private val token: String? = null,
     private val network: Network? = null,
+    private val timeoutMs: Int = 4000,
 ) {
     private fun open(path: String, timeoutMs: Int): HttpURLConnection {
         val url = URL("http://$host$path")
@@ -50,7 +51,7 @@ class GwApi(
         method: String,
         path: String,
         body: JSONObject? = null,
-        timeoutMs: Int = 4000,
+        timeoutMs: Int = this.timeoutMs,
     ): String = withContext(Dispatchers.IO) {
         val c = open(path, timeoutMs)
         try {

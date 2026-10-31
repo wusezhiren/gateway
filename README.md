@@ -68,7 +68,7 @@ C3 继电器节点用的是这种（关了深睡）。浅睡后 USB 串口日志
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
 合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，
-继电器 IN 接 GPIO4、VCC 接 3V3；板载 LED D4(GPIO12) 呼吸灯、D5(GPIO13) 慢闪，各作一路开关。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
+继电器 IN 接 GPIO4、VCC 接 3V3，只有这一路开关（板载 LED D4/D5 不用）。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
 
 ```bash
 idf.py -B build_c3relay -DSDKCONFIG=build_c3relay/sdkconfig -DNODE_PROJECT=esp_c3_relay \
@@ -136,4 +136,6 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   App 启动时检查 `version.json` 自动更新，固件页提示“升级到 vX”把内置固件推给网关（不在局域网时让网关自己下载），
   节点卡片提示“有新固件”让网关下载并升级节点。
   凭据在 `local/`（不上传）：`gitee_token`、`keystore.properties`/`release.keystore`（**务必备份**）、`cloud.json`
+- 快捷开关：节点详情里点“快捷开关”把一路开关绑到「灯 1~3」，手机下拉栏（编辑后拖入）和桌面小组件“灯开关”里点一下即开关；
+  先走局域网，连不上再临时连云端
 - 外网访问：网关和 App 都连云端 MQTT（EMQX Cloud），在 App「网关 → 云端设置」填写，见 [docs/cloud.md](docs/cloud.md)

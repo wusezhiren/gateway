@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.homenet.espgw.data.Channel
 import com.homenet.espgw.data.Node
+import com.homenet.espgw.data.QuickTiles
+import com.homenet.espgw.data.TileBinding
 import com.homenet.espgw.data.NodeFirmware
 import com.homenet.espgw.data.NodeOtaStatus
 import com.homenet.espgw.data.Rgb
@@ -264,6 +267,7 @@ private fun ChannelControl(index: Int, ch: Channel, enabled: Boolean, onSet: (In
 private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> Unit, onRename: (String) -> Unit) {
     var confirm by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var tiles by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(node.title) },
@@ -281,6 +285,7 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
         dismissButton = {
             Row {
+                TextButton(onClick = { tiles = true }) { Text("快捷开关") }
                 TextButton(onClick = { renaming = true }) { Text("改名") }
                 TextButton(onClick = { confirm = true }) {
                     Text("解绑", color = MaterialTheme.colorScheme.error)
@@ -291,6 +296,9 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
     if (renaming) {
         RenameDialog(node.name, onConfirm = onRename, onDismiss = { renaming = false })
     }
+    if (tiles) {
+        QuickTileDialog(node, onDismiss = { tiles = false })
+    }
     if (confirm) {
         ConfirmDialog(
             title = "解绑节点",
@@ -300,6 +308,52 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
             onDismiss = { confirm = false },
         )
     }
+}
+
+/** 把节点的一路开关绑到手机下拉栏的快捷开关「灯 1~3」 */
+@Composable
+private fun QuickTileDialog(node: Node, onDismiss: () -> Unit) {
+    val qt = QuickTiles(LocalContext.current)
+    var ch by remember { mutableStateOf(0) }
+    var version by remember { mutableStateOf(0) }  // 绑定改了之后重组
+    val label = if (node.ch.size > 1) "${node.title} ${ch + 1}" else node.title
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("快捷开关") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (node.ch.size > 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("通道", Modifier.width(48.dp))
+                        node.ch.indices.forEach { i ->
+                            TextButton(onClick = { ch = i }) {
+                                Text("${i + 1}", color = if (i == ch) MaterialTheme.colorScheme.primary else Color.Gray)
+                            }
+                        }
+                    }
+                }
+                version.let { }
+                (1..QuickTiles.SLOTS).forEach { slot ->
+                    val b = qt.get(slot)
+                    val mine = b != null && b.mac == node.mac && b.ch == ch
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("灯 $slot", Modifier.width(48.dp))
+                        Text(b?.label ?: "未设置", Modifier.weight(1f), color = if (b == null) Color.Gray else Color.Unspecified)
+                        TextButton(onClick = {
+                            qt.set(slot, if (mine) null else TileBinding(node.mac, ch, label))
+                            version++
+                        }) { Text(if (mine) "取消" else "绑定") }
+                    }
+                }
+                Text(
+                    "绑定后在手机下拉栏点“编辑”，把「灯 1」等拖进快捷开关区，点一下就开关。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
+    )
 }
 
 /** 节点名存在网关上，最长 16 字节 UTF-8（约 5 个汉字） */

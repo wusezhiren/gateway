@@ -29,6 +29,64 @@
             </intent-filter>
         </activity>
 
+        <!-- 下拉快捷开关 1，绑定见 data/QuickTiles.kt -->
+        <service
+            android:name=".tile.LampTile1"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_lamp"
+            android:label="灯 1"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- 下拉快捷开关 2，绑定见 data/QuickTiles.kt -->
+        <service
+            android:name=".tile.LampTile2"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_lamp"
+            android:label="灯 2"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- 下拉快捷开关 3，绑定见 data/QuickTiles.kt -->
+        <service
+            android:name=".tile.LampTile3"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_lamp"
+            android:label="灯 3"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- 桌面小组件，显示快捷开关「灯 1~3」 -->
+        <receiver
+            android:name=".widget.LampWidget"
+            android:exported="false"
+            android:label="灯开关">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/lamp_widget_info" />
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

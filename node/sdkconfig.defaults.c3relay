@@ -13,3 +13,6 @@ CONFIG_NODE_RGB_GPIO=-1
 CONFIG_NODE_RESET_GPIO=9
 # 板载 flash 是 DIO 接法，GPIO12/13 接板上 LED D4/D5，不能改成 QIO
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+# 不签名、OTA 不校验签名：编译不需要 keys/signing_key.pem，正式签名的固件也能升级上来
+# 代价是谁能经网关推 OTA 就能刷任意固件；其他节点仍要求签名
+# CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT is not set

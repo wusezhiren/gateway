@@ -4,7 +4,7 @@
   tools/release_app.py 0.2.0 --notes "更新说明" [--gw-version 0.4.1] [--skip-gateway] [--skip-nodes] [--dry-run]
 
 步骤：
-  1. 编译网关固件（签名），版本 --gw-version（默认取 gateway/CMakeLists.txt）；
+  1. 编译网关固件（不签名），版本 --gw-version（默认取 gateway/CMakeLists.txt）；
      编译各种节点固件（NODE_BUILDS），版本取 node/CMakeLists.txt
   2. 打 App release 包（发布签名，内置网关固件），版本号即参数
   3. 在 gitee 发布仓库建 Release vX.Y.Z，上传 APK、网关固件和节点固件，更新 version.json

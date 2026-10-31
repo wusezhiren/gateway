@@ -24,7 +24,8 @@ ESP-IDF 5.4：
 
 ## 签名密钥
 
-固件必须签名，OTA 时校验签名（`SECURE_SIGNED_APPS_NO_SECURE_BOOT`，RSA-3072，不烧 eFuse）。
+节点固件签名，OTA 时校验签名（`SECURE_SIGNED_APPS_NO_SECURE_BOOT`，RSA-3072，不烧 eFuse）。
+网关和 C3 继电器节点（`esp_c3_relay`）关掉了签名，编译不需要密钥，OTA 也不校验签名。
 
 ```bash
 mkdir -p keys
@@ -63,7 +64,7 @@ idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_ko
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
 合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，
-继电器 IN 接 GPIO4、VCC 接 3V3：
+继电器 IN 接 GPIO4、VCC 接 3V3。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
 
 ```bash
 idf.py -B build_c3relay -DSDKCONFIG=build_c3relay/sdkconfig -DNODE_PROJECT=esp_c3_relay \
@@ -95,7 +96,8 @@ ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
 tools/ota_upload.py 192.168.x.x gateway/build/esp_s3_gateway.bin --token <token>
 ```
 
-- 只接受用 `keys/signing_key.pem` 签名的网关固件，默认不允许同版本或降级（`--force` 例外）
+- 网关不校验签名，默认不允许同版本或降级（`--force` 例外）
+- 还在跑旧签名版的网关只接受签名固件，要先 USB 烧一次不签名的版本
 - 版本号在构建时指定：`idf.py -DPROJECT_VER=0.2.0 build`
 - 新固件确认前崩溃会自动回滚；回滚测试固件可用
   `CONFIG_GW_TEST_ABORT_BEFORE_VALIDATE=y` 单独构建（**不要发布**）

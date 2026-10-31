@@ -379,6 +379,10 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
     for (int i = 0; i < s_n; i++) {
         if (!s_ch[i].exp) {
             gpio_hold_dis(s_ch[i].gpio);
+#if CONFIG_PM_SLP_DISABLE_GPIO
+            /* 自动浅睡默认把所有引脚隔离成高阻，输出引脚要保持原电平，否则每个周期断一下，灯会闪 */
+            gpio_sleep_sel_dis(s_ch[i].gpio);
+#endif
         }
     }
     restore();

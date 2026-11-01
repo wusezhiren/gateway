@@ -68,7 +68,7 @@ C3 继电器节点用的是这种（关了深睡）。浅睡后 USB 串口日志
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
 合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，
-继电器 IN 接 GPIO4、VCC 接 3V3，只有这一路开关（板载 LED D4/D5 不用）。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
+继电器 IN 接 GPIO4、VCC 接 3V3；不带 PWM 调光通道，板载 LED D4(GPIO12)、D5(GPIO13) 开机拉低熄灭（`NODE_LED_OFF_GPIOS`）。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
 
 ```bash
 idf.py -B build_c3relay -DSDKCONFIG=build_c3relay/sdkconfig -DNODE_PROJECT=esp_c3_relay \

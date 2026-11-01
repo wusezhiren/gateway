@@ -31,6 +31,11 @@ static const char *TAG = "node_io";
 #else
 #define EXP_ACTIVE_LOW 0
 #endif
+#ifdef CONFIG_NODE_LED_OFF_ACTIVE_LOW
+#define LED_OFF_ACTIVE_LOW 1
+#else
+#define LED_OFF_ACTIVE_LOW 0
+#endif
 #ifdef CONFIG_NODE_PWM_ACTIVE_LOW
 #define PWM_ACTIVE_LOW 1
 #else
@@ -95,6 +100,31 @@ static int parse_gpios(const char *list, int out[], int max)
         p = end;
     }
     return n;
+}
+
+/* 不作通道用的板载 LED：浮空会微亮，开机拉到熄灭电平，浅睡、深睡时也保持 */
+static int s_off_gpio[8];
+static int s_n_off;
+
+static void leds_off(void)
+{
+    int gpios[8];
+    int n = parse_gpios(CONFIG_NODE_LED_OFF_GPIOS, gpios, 8);
+    s_n_off = 0;
+    for (int i = 0; i < n; i++) {
+        if (!GPIO_IS_VALID_OUTPUT_GPIO(gpios[i])) {
+            ESP_LOGW(TAG, "led-off gpio %d invalid", gpios[i]);
+            continue;
+        }
+        gpio_hold_dis(gpios[i]);
+        gpio_reset_pin(gpios[i]);
+        gpio_set_level(gpios[i], LED_OFF_ACTIVE_LOW ? 1 : 0);
+        gpio_set_direction(gpios[i], GPIO_MODE_OUTPUT);
+#if CONFIG_PM_SLP_DISABLE_GPIO
+        gpio_sleep_sel_dis(gpios[i]);
+#endif
+        s_off_gpio[s_n_off++] = gpios[i];
+    }
 }
 
 static esp_err_t add_relay(int gpio)
@@ -291,6 +321,8 @@ esp_err_t node_io_init(mp_ch_desc_t desc[MP_MAX_CH], uint8_t *n_ch)
 {
     int gpios[MP_MAX_CH];
     int n;
+
+    leds_off();
 
     s_n = 0;
     n = parse_gpios(CONFIG_NODE_RELAY_GPIOS, gpios, MP_MAX_CH);
@@ -537,6 +569,9 @@ void node_io_prepare_sleep(void)
         if (!s_ch[i].exp) {
             gpio_hold_en(s_ch[i].gpio);
         }
+    }
+    for (int i = 0; i < s_n_off; i++) {
+        gpio_hold_en(s_off_gpio[i]);
     }
     gpio_deep_sleep_hold_en();
 }

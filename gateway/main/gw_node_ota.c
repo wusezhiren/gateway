@@ -551,7 +551,9 @@ static const char *run_job(const job_t *job)
     char version[MP_VER_LEN + 1];
     strlcpy(version, ((const esp_app_desc_t *)(head + DESC_OFFSET))->version, sizeof(version));
     err = find_node(job->mac, &node);   /* 下载期间可能掉线 */
-    if (!err && (node.sleep_s || node.lp_interval_ms)) {
+    if (!err) {
+        /* 总是先要求保持唤醒、等它下一次心跳：网关重启后节点只靠心跳回来、不重新入网，
+         * sleep_s / lp_interval_ms 没落盘，省电节点会被当成常醒，升级帧发在接收窗口外收不到 */
         err = wake_node(job->mac, &node);
     }
     if (err) {

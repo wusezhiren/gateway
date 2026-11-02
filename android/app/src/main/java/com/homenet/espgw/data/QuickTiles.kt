@@ -44,8 +44,20 @@ class QuickTiles(private val context: Context) {
 
     fun refreshAll() = (1..SLOTS).forEach(::refresh)
 
+    /** 节点在 App、网关屏幕或别的手机上改了名，绑定里存的名字跟着改，磁贴和小组件一起刷新 */
+    fun syncLabels(nodes: List<Node>) {
+        for (slot in 1..SLOTS) {
+            val b = get(slot) ?: continue
+            val node = nodes.firstOrNull { it.mac == b.mac } ?: continue
+            val name = label(node, b.ch)
+            if (name != b.label) set(slot, b.copy(label = name))
+        }
+    }
+
     companion object {
         const val SLOTS = 3
+
+        fun label(node: Node, ch: Int) = if (node.ch.size > 1) "${node.title} ${ch + 1}" else node.title
         private val SERVICES = listOf(LampTile1::class.java, LampTile2::class.java, LampTile3::class.java)
     }
 }

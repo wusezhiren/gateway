@@ -316,7 +316,7 @@ private fun QuickTileDialog(node: Node, onDismiss: () -> Unit) {
     val qt = QuickTiles(LocalContext.current)
     var ch by remember { mutableStateOf(0) }
     var version by remember { mutableStateOf(0) }  // 绑定改了之后重组
-    val label = if (node.ch.size > 1) "${node.title} ${ch + 1}" else node.title
+    val label = QuickTiles.label(node, ch)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("快捷开关") },

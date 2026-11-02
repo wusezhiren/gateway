@@ -25,6 +25,7 @@ import com.homenet.espgw.data.GwApi
 import com.homenet.espgw.data.GwInfo
 import com.homenet.espgw.data.Node
 import com.homenet.espgw.data.NodeFirmware
+import com.homenet.espgw.data.QuickTiles
 import com.homenet.espgw.data.gatewayErrorText
 import com.homenet.espgw.data.userMessage
 import kotlinx.coroutines.CancellationException
@@ -67,8 +68,14 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var info by mutableStateOf<GwInfo?>(null)
         private set
-    var nodes by mutableStateOf<List<Node>>(emptyList())
-        private set
+    private val tiles = QuickTiles(app)
+    private val nodesState = mutableStateOf<List<Node>>(emptyList())
+    var nodes: List<Node>
+        get() = nodesState.value
+        private set(value) {
+            nodesState.value = value
+            if (value.isNotEmpty()) tiles.syncLabels(value)
+        }
     var pairLeft by mutableIntStateOf(0)
         private set
     var transport by mutableStateOf(Transport.None)

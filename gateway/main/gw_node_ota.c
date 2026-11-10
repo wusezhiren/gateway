@@ -23,7 +23,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "mbedtls/sha256.h"
+#include "gw_sha256.h"
 #include "gw_http.h"
 #include "gw_link.h"
 #include "gw_node_ota.h"
@@ -71,7 +71,7 @@ typedef struct {
     uint32_t written;
     uint32_t erased;
     int last_pct;
-    mbedtls_sha256_context sha;
+    gw_sha256_ctx_t sha;
 } stage_t;
 
 static SemaphoreHandle_t s_lock;
@@ -217,8 +217,11 @@ static const char *stage_begin(stage_t *s, uint32_t total)
         return "too_large";
     }
     s->total = total;
-    mbedtls_sha256_init(&s->sha);
-    mbedtls_sha256_starts(&s->sha, 0);
+    gw_sha256_init(&s->sha);
+    if (gw_sha256_starts(&s->sha) != 0) {
+        gw_sha256_free(&s->sha);
+        return "sha256_failed";
+    }
     return NULL;
 }
 
@@ -236,7 +239,9 @@ static const char *stage_write(stage_t *s, const uint8_t *buf, int n)
     if (esp_partition_write(s_part, s->written, buf, n) != ESP_OK) {
         return "flash_write_failed";
     }
-    mbedtls_sha256_update(&s->sha, buf, n);
+    if (gw_sha256_update(&s->sha, buf, n) != 0) {
+        return "sha256_failed";
+    }
     s->written += n;
     set_progress(s->written, &s->last_pct);
     return NULL;
@@ -245,8 +250,11 @@ static const char *stage_write(stage_t *s, const uint8_t *buf, int n)
 /* expect 为 NULL 时不核对（局域网上传），sha_out 返回实际 SHA-256 */
 static const char *stage_finish(stage_t *s, const uint8_t *expect, uint8_t sha_out[32])
 {
-    mbedtls_sha256_finish(&s->sha, sha_out);
-    mbedtls_sha256_free(&s->sha);
+    int hash_err = gw_sha256_finish(&s->sha, sha_out);
+    gw_sha256_free(&s->sha);
+    if (hash_err != 0) {
+        return "sha256_failed";
+    }
     if (s->written != s->total) {
         return "incomplete";
     }
@@ -262,7 +270,7 @@ static const char *stage_finish(stage_t *s, const uint8_t *expect, uint8_t sha_o
 static void stage_abort(stage_t *s)
 {
     if (s->total) {
-        mbedtls_sha256_free(&s->sha);
+        gw_sha256_free(&s->sha);
         s->total = 0;
     }
 }

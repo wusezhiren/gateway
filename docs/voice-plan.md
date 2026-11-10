@@ -27,11 +27,11 @@ Android App ──HTTP/原 MQTT──┐
 | 代码 | `gateway/main/main.c`、`gw_cloud.c`、`gw_api.c`、`gw_link.h`；App 的 `GwApi.kt` | 通过原有控制接口执行语音命令；不阻塞 ESP-NOW 回调；保持原 API 和 App 兼容 |
 | 音频硬件 | KS_S3_KORVO_V4 原理图：ES7210 双麦、ES8311 DAC、NS4150B 功放；I2C GPIO17/18、MCLK GPIO16、BCLK GPIO9、LRCK GPIO45、输入 GPIO10、输出 GPIO8、功放 GPIO48 | 开发前核对原理图、板级例程和实测引脚；分离录音、播放和音频任务 |
 | 按键 | ADC 按键 GPIO5，REC 长按已有配网用途 | 保留 REC 长按语义；语音按键不能与配网冲突 |
-| Flash | 16 MiB；双 3 MiB OTA 应用槽、4 MiB `node_fw`、约 5.875 MiB `storage` SPIFFS；独立重编镜像 2,662,688 字节（2.539 MiB），单槽余 483,040 字节（471.7 KiB） | 加音频前测算 app、模型和资源包实际占用；如需改分区，先设计迁移与恢复，不得默默缩减节点暂存或破坏 OTA |
+| Flash | 16 MiB；双 3 MiB OTA 应用槽、4 MiB `node_fw`、约 5.875 MiB `storage` SPIFFS；加入 Opus 后镜像 0x2babf0，单槽余 0x45410（约 277 KiB） | 后续云端协议/模型继续测算实际占用；如需改分区，先设计迁移与恢复，不得默默缩减节点暂存或破坏 OTA |
 | TF 卡（可选） | KS_S3_KORVO_V4 原理图有 J2 TF 卡座：SD_CLK GPIO15、SD_CMD GPIO7、SD_DATA0 GPIO4；当前网关源码未占用这三根 GPIO | 优先评估 SDMMC 1-bit 模式存放提示音及可从文件加载的模型；插卡后实测读速、启动及拔卡恢复。是否支持直接从文件加载唤醒模型取决于所选语音组件，不能预先假定可用 |
 | RAM | 8 MiB Octal PSRAM；Wi-Fi、MQTT TLS、LVGL 和节点 OTA 已占内部 RAM | 测内部堆/PSRAM 余量、任务栈、音频延时和看门狗；DMA 缓冲按硬件约束分配 |
 | 唤醒词 | 参考实现有“你好小智”模型，**并非**用户指定的“小智小智” | 确认目标词模型来源、许可、ESP-SR 版本、体积和检测效果；不可只改显示文字 |
-| SDK | 网关 ESP-IDF 5.4，当前小智开源主线的 IDF 要求更高 | 找兼容组件/移植方式；若必须升级 IDF，先验证旧网关、App、节点和 OTA 全链路 |
+| SDK | 网关已迁移到 ESP-IDF 6.0.1 并上板启动，原 5.4 环境仍保留 | 旧节点、App 和 OTA 的完整回归尚待实际设备/升级场景验证；迁移不等于直接替换网关架构 |
 
 参考：[小智开源项目](https://github.com/78/xiaozhi-esp32)、[MCP 工具说明](https://github.com/78/xiaozhi-esp32/blob/main/docs/mcp-usage.md)、[自定义板说明](https://github.com/78/xiaozhi-esp32/blob/main/docs/custom-board.md)。MCP 工具调用负责请求设备动作，不承担语音识别，也不会自动接管 ESPHome 设备。
 
@@ -61,9 +61,12 @@ TF 卡资源策略：卡用于可替换的大文件，不会扩展 Flash 中的 
 
 - Korvo 已连接路由器，HTTP `/api/info` 返回 200；屏幕、触摸和 ESP-NOW 初始化正常，暂无配对节点。
 - `audio probe` 实测 ES7210/ES8311 应答正常；`audio mic` 已采到双麦有效数据（四个 TDM 槽中的 0、2 槽），扬声器测试音已由现场确认可听到。按当前需求跳过录音回放验收，优先推进语音上传。
-- `gw_audio_capture()` 提供有界时长的 16 kHz、16-bit 单声道 PCM 回调，供编码/上传任务复用；原诊断命令继续可用。接口重构已编译通过，尚未刷入该次重构版本；上板的仍为先前录放诊断版本。
-- 当前构建 app 为 0x2977f0 字节，3 MiB 槽剩余 0x68810 字节；联网诊断版内部堆约 37 KiB，后续需单独测 Opus 与 TLS 并发。
-- 已核对上游 WebSocket 协议：通常上传 Opus、16 kHz、单声道、60 ms 帧；需设备身份、Client UUID、服务端鉴权与 hello 会话协商。当前只有 PCM 输入，尚未实现 Opus 编码、云端连接、ASR 或 MCP 云端闭环。
+- `gw_audio_capture()` 提供有界时长的 16 kHz、16-bit 单声道 PCM 回调，原诊断命令继续可用。基于 IDF 6.0.1 的音频版本已刷板；网关 Wi-Fi、ESP-NOW 初始化、显示和麦克风诊断通过，旧节点/App/OTA 完整回归尚待验证。
+- 已核对上游 WebSocket 协议：上传 Opus、16 kHz、单声道、60 ms 帧；需设备身份、Client UUID、服务端鉴权与 hello 会话协商。尚未实现云端连接、ASR 或 MCP 云端闭环。
+- 在 IDF 6.0.1 + `esp_audio_codec` 2.5.0 下，用独立 PSRAM 栈任务完成 16 kHz 单声道、60 ms Opus 编码：每帧输入 1,920 字节、输出缓冲 220 字节；2.04 秒采集得到 34 帧、4,080 字节编码数据，三次编码耗时约 0.73–0.75 秒；编码期间内部堆约 53 KiB。最初在串口 REPL 小栈上直接调用编码器导致崩溃，独立任务后已排除；用 `vTaskDeleteWithCaps()` 回收任务栈，重复运行 PSRAM 不再逐次下降。当前镜像 0x2babf0，3 MiB 槽余 0x45410（约 277 KiB），后续需严格控制新增代码和资源。
+- 已加入本地 MCP 工具适配 `gw_voice_tools.[ch]`，只暴露 `gateway.nodes.list` 与 `gateway.node.set`，底层复用 `gw_api_nodes_json()` / `gw_api_exec()`；明确拒绝配对、解绑、网关升级等高权限操作。串口 `mcp list|call` 已在 Korvo 验证：无节点列表正常、未知节点返回 `no_such_node`、非法 MAC 返回 JSON-RPC `-32602`；工具处理函数现在返回 JSON 对象，后续可直接挂 WebSocket/MQTT 传输层。
+- 已加入 `gw_voice_ws.[ch]` WebSocket 会话骨架，使用 IDF 6.0.1 的 `esp_websocket_client`：NVS 保存 URL/Token/Client UUID，连接时发送设备身份和 `hello`，收到服务端 `hello` 后才处理 `type=mcp`，MCP 回复包装回 `session_id`/`type=mcp`。串口命令为 `voicews status|start|stop|config <wss-url> <token>`；未配置时 `start` 正确拒绝。真实云端握手尚未执行，不能把骨架当作已接入云端。
+- WebSocket/MCP 骨架版已在 Korvo 编译并上板；网关仍能联网、查询 OTA 状态和执行 Opus 诊断，镜像为 0x2bf950，3 MiB 槽余约 263 KiB。真实 URL、Token 和激活信息尚未配置，下一步需要先完成云端账号/设备绑定，再做 hello 握手与服务端 MCP 回包实测。
 - 官方设备激活流程返回连接配置，不能简单填一个固定 WebSocket 地址代替激活。仅借鉴接入协议，原固件 OTA 仍由本仓库管理。免费额度/长期收费政策尚未得到可核实的官方说明，不承诺免费不限量。
 
 1. 云端语音服务的设备接入、鉴权和 MCP 支持方式；首选验证可直接连云端的方案，不强制依赖树莓派。

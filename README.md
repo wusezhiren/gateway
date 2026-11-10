@@ -16,10 +16,11 @@ docs/                   文档
 
 ## 环境
 
-ESP-IDF 5.4：
+网关使用 ESP-IDF 6.0.1；节点固件暂保留 ESP-IDF 5.4：
 
 ```bash
-. ~/esp/esp-idf/export.sh
+. ~/esp/esp-idf-v6.0.1/export.sh  # 编译 gateway/
+# . ~/esp/esp-idf/export.sh       # 编译 node/
 ```
 
 ## 签名密钥

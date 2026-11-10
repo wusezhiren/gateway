@@ -11,7 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "mbedtls/sha256.h"
+#include "gw_sha256.h"
 #include "gw_http.h"
 #include "gw_node_ota.h"
 #include "gw_ota.h"
@@ -110,7 +110,7 @@ typedef struct {
     int total;
     int received;
     int last_pct;
-    mbedtls_sha256_context sha;
+    gw_sha256_ctx_t sha;
 } ota_sess_t;
 
 /* 第一块数据（至少 HEAD_NEED 字节）：检查镜像头并开始写 */
@@ -148,8 +148,13 @@ static const char *sess_begin(ota_sess_t *s, const char *buf, int n, int total, 
         s->h = 0;
         return "ota_begin_failed";
     }
-    mbedtls_sha256_init(&s->sha);
-    mbedtls_sha256_starts(&s->sha, 0);
+    gw_sha256_init(&s->sha);
+    if (gw_sha256_starts(&s->sha) != 0) {
+        esp_ota_abort(s->h);
+        s->h = 0;
+        gw_sha256_free(&s->sha);
+        return "sha256_failed";
+    }
     return NULL;
 }
 
@@ -161,7 +166,9 @@ static const char *sess_write(ota_sess_t *s, const char *buf, int n)
     if (esp_ota_write(s->h, buf, n) != ESP_OK) {
         return "flash_write_failed";
     }
-    mbedtls_sha256_update(&s->sha, (const unsigned char *)buf, n);
+    if (gw_sha256_update(&s->sha, (const unsigned char *)buf, n) != 0) {
+        return "sha256_failed";
+    }
     s->received += n;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_st.received = s->received;
@@ -178,8 +185,13 @@ static const char *sess_write(ota_sess_t *s, const char *buf, int n)
 static const char *sess_finish(ota_sess_t *s, const uint8_t *expect_sha)
 {
     uint8_t sha[32];
-    mbedtls_sha256_finish(&s->sha, sha);
-    mbedtls_sha256_free(&s->sha);
+    int hash_err = gw_sha256_finish(&s->sha, sha);
+    gw_sha256_free(&s->sha);
+    if (hash_err != 0) {
+        esp_ota_abort(s->h);
+        s->h = 0;
+        return "sha256_failed";
+    }
     if (s->received != s->total) {
         esp_ota_abort(s->h);
         s->h = 0;
@@ -206,7 +218,7 @@ static void sess_abort(ota_sess_t *s)
 {
     if (s->h) {
         esp_ota_abort(s->h);
-        mbedtls_sha256_free(&s->sha);
+        gw_sha256_free(&s->sha);
         s->h = 0;
     }
 }

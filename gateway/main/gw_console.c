@@ -25,6 +25,8 @@
 #include "esp_timer.h"
 #include "gw_display.h"
 #include "gw_audio.h"
+#include "gw_voice_tools.h"
+#include "gw_voice_ws.h"
 #include "gw_keys.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
@@ -289,7 +291,47 @@ static int cmd_audio(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "speaker") == 0) {
         return gw_audio_speaker_test() == ESP_OK ? 0 : 1;
     }
-    printf("usage: audio probe|mic|speaker\n");
+    if (argc == 2 && strcmp(argv[1], "opus") == 0) {
+        return gw_audio_opus_test() == ESP_OK ? 0 : 1;
+    }
+    printf("usage: audio probe|mic|speaker|opus\n");
+    return 1;
+}
+
+static int cmd_mcp(int argc, char **argv)
+{
+    const char *json = NULL;
+    if (argc == 2 && strcmp(argv[1], "list") == 0) {
+        json = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}";
+    } else if (argc == 3 && strcmp(argv[1], "call") == 0) {
+        json = argv[2];
+    } else {
+        printf("usage: mcp list|call <json>\n");
+        return 1;
+    }
+    cJSON *request = cJSON_Parse(json);
+    cJSON *response = gw_voice_tools_handle(request);
+    cJSON_Delete(request);
+    char *text = cJSON_PrintUnformatted(response);
+    cJSON_Delete(response);
+    if (!text) {
+        return 1;
+    }
+    printf("%s\n", text);
+    cJSON_free(text);
+    return 0;
+}
+
+static int cmd_voicews(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "status")) {
+        gw_voice_ws_status();
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "start")) return gw_voice_ws_start() == ESP_OK ? 0 : 1;
+    if (argc == 2 && !strcmp(argv[1], "stop")) { gw_voice_ws_stop(); return 0; }
+    if (argc == 4 && !strcmp(argv[1], "config")) return gw_voice_ws_config(argv[2], argv[3]) == ESP_OK ? 0 : 1;
+    printf("usage: voicews status|start|stop|config <wss-url> <token>\n");
     return 1;
 }
 
@@ -320,7 +362,9 @@ void gw_console_start(void)
         {.command = "ota",    .help = "ota | ota url <https-url> <sha256> [force], show status or download & upgrade", .func = cmd_ota},
         {.command = "nodeota", .help = "nodeota | nodeota <mac> <https-url> <sha256> [force]", .func = cmd_nodeota},
         {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
-        {.command = "audio",  .help = "audio probe|mic|speaker, codec and audio diagnostics", .func = cmd_audio},
+        {.command = "audio",  .help = "audio probe|mic|speaker|opus, audio diagnostics", .func = cmd_audio},
+        {.command = "mcp",    .help = "mcp list|call <json>, local MCP tool probe", .func = cmd_mcp},
+        {.command = "voicews", .help = "voicews status|start|stop|config <url> <token>", .func = cmd_voicews},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

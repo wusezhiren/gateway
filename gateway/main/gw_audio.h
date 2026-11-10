@@ -19,3 +19,6 @@ esp_err_t gw_audio_mic_test(void);
 
 /* Low-volume, short speaker diagnostic. */
 esp_err_t gw_audio_speaker_test(void);
+
+/* Capture 2 seconds and encode 16 kHz mono PCM into 60 ms Opus frames. */
+esp_err_t gw_audio_opus_test(void);

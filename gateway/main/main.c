@@ -21,6 +21,7 @@
 #include "gw_node_ota.h"
 #include "gw_prov.h"
 #include "gw_wifi.h"
+#include "gw_voice_ws.h"
 #include "ui.h"
 
 void gw_console_start(void);
@@ -164,6 +165,7 @@ void app_main(void)
     gw_link_set_event_cb(on_event);
     ESP_ERROR_CHECK(gw_link_start());
     ESP_ERROR_CHECK(gw_cloud_init());
+    ESP_ERROR_CHECK(gw_voice_ws_init());
     ESP_ERROR_CHECK(gw_http_start());
     gw_ota_set_cb(on_ota);
     gw_node_ota_set_cb(on_node_ota);

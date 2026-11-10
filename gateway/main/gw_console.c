@@ -24,6 +24,7 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "gw_display.h"
+#include "gw_audio.h"
 #include "gw_keys.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
@@ -277,6 +278,21 @@ static int cmd_exp(int argc, char **argv)
     return err == ESP_OK ? 0 : 1;
 }
 
+static int cmd_audio(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "probe") == 0) {
+        return gw_audio_probe() == ESP_OK ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "mic") == 0) {
+        return gw_audio_mic_test() == ESP_OK ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "speaker") == 0) {
+        return gw_audio_speaker_test() == ESP_OK ? 0 : 1;
+    }
+    printf("usage: audio probe|mic|speaker\n");
+    return 1;
+}
+
 void gw_console_start(void)
 {
     esp_console_repl_t *repl = NULL;
@@ -304,6 +320,7 @@ void gw_console_start(void)
         {.command = "ota",    .help = "ota | ota url <https-url> <sha256> [force], show status or download & upgrade", .func = cmd_ota},
         {.command = "nodeota", .help = "nodeota | nodeota <mac> <https-url> <sha256> [force]", .func = cmd_nodeota},
         {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
+        {.command = "audio",  .help = "audio probe|mic|speaker, codec and audio diagnostics", .func = cmd_audio},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

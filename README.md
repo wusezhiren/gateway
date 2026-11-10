@@ -1,7 +1,7 @@
 # esp-s3 组网
 
 ESP-NOW 星型组网：酷世 KS_S3_KORVO_V4 作网关，ESP32-C3 / ESP32-S3 核心板作节点。
-计划与进度见 [docs/PLAN.md](docs/PLAN.md)，协议见 [docs/protocol.md](docs/protocol.md)。
+原组网计划与进度见 [docs/PLAN.md](docs/PLAN.md)，原网关语音中控迭代见 [docs/voice-plan.md](docs/voice-plan.md)，协议见 [docs/protocol.md](docs/protocol.md)。
 
 ## 目录
 

@@ -22,6 +22,8 @@
 #include "gw_prov.h"
 #include "gw_wifi.h"
 #include "gw_voice_ws.h"
+#include "gw_sd.h"
+#include "gw_wake.h"
 #include "ui.h"
 
 void gw_console_start(void);
@@ -166,6 +168,7 @@ void app_main(void)
     ESP_ERROR_CHECK(gw_link_start());
     ESP_ERROR_CHECK(gw_cloud_init());
     ESP_ERROR_CHECK(gw_voice_ws_init());
+    gw_sd_init();
     ESP_ERROR_CHECK(gw_http_start());
     gw_ota_set_cb(on_ota);
     gw_node_ota_set_cb(on_node_ota);
@@ -177,6 +180,10 @@ void app_main(void)
         gw_api_set_bind_cb(ui_request_bind_confirm);
     } else {
         ESP_LOGE(TAG, "display init failed, running headless");
+    }
+    if (gw_sd_is_mounted()) {
+        esp_err_t wake_err = gw_wake_start();
+        if (wake_err != ESP_OK) ESP_LOGW(TAG, "offline wake disabled: %s", esp_err_to_name(wake_err));
     }
     ESP_ERROR_CHECK(gw_keys_start(on_key));
 

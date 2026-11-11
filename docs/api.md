@@ -134,7 +134,7 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 
 ### `POST /api/ota/gateway[?force=1]`（需鉴权）
 
-请求体为**签名后的**网关固件（`gateway/build/esp_s3_gateway.bin`），`Content-Type: application/octet-stream`，必须带 `Content-Length`。
+请求体为网关固件（`gateway/build_wake/esp_s3_gateway.bin`，当前网关不校验签名），`Content-Type: application/octet-stream`，必须带 `Content-Length`。
 
 处理流程：
 
@@ -160,7 +160,7 @@ TXT `mac`=STA MAC、`version`=固件版本）。App 用 TXT 里的 MAC 识别同
 PC 工具：
 
 ```bash
-tools/ota_upload.py <网关IP> gateway/build/esp_s3_gateway.bin --token <token> [--force]
+tools/ota_upload.py <网关IP> gateway/build_wake/esp_s3_gateway.bin --token <token> [--force]
 ```
 
 升级过程中可轮询 `/api/info` 的 `ota` 字段查看进度。

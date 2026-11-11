@@ -1,5 +1,6 @@
 #include <math.h>
 #include <string.h>
+#include "esp_app_desc.h"
 #include "gw_api.h"
 #include "gw_voice_tools.h"
 
@@ -97,6 +98,15 @@ cJSON *gw_voice_tools_handle(const cJSON *request)
     const cJSON *id = cJSON_GetObjectItem(request, "id");
     const char *version = cJSON_GetStringValue(cJSON_GetObjectItem(request, "jsonrpc"));
     const char *method = cJSON_GetStringValue(cJSON_GetObjectItem(request, "method"));
+    if (method && !strcmp(method, "initialize")) {
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddStringToObject(result, "protocolVersion", "2024-11-05");
+        cJSON_AddObjectToObject(result, "capabilities");
+        cJSON *info = cJSON_AddObjectToObject(result, "serverInfo");
+        cJSON_AddStringToObject(info, "name", "esp-s3-gateway");
+        cJSON_AddStringToObject(info, "version", esp_app_get_description()->version);
+        return reply(id, result, 0, NULL);
+    }
     if (!version || strcmp(version, "2.0") || !method ||
         !id || !(cJSON_IsNumber(id) || cJSON_IsString(id))) {
         return reply(id, NULL, -32600, "invalid request");

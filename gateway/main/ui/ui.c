@@ -548,6 +548,9 @@ void ui_start(void)
     build();
     refresh_timer_cb(NULL);
     lv_timer_create(refresh_timer_cb, REFRESH_MS, NULL);
+    /* Voice gateway runs headless until the user touches the panel. Keep the
+     * existing overlay/confirmation wake-up path available when needed. */
+    if (!ui_overlay_update() && !ui_dialog_open()) screen_set(false);
     gw_display_unlock();
 }
 

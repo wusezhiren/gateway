@@ -27,6 +27,8 @@
 #include "gw_audio.h"
 #include "gw_voice_tools.h"
 #include "gw_voice_ws.h"
+#include "gw_sd.h"
+#include "gw_wake.h"
 #include "gw_keys.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
@@ -329,10 +331,39 @@ static int cmd_voicews(int argc, char **argv)
         return 0;
     }
     if (argc == 2 && !strcmp(argv[1], "start")) return gw_voice_ws_start() == ESP_OK ? 0 : 1;
+    if (argc == 2 && !strcmp(argv[1], "listen")) return gw_voice_ws_listen() == ESP_OK ? 0 : 1;
+    if (argc == 2 && !strcmp(argv[1], "auto")) return gw_voice_ws_listen_auto() == ESP_OK ? 0 : 1;
     if (argc == 2 && !strcmp(argv[1], "stop")) { gw_voice_ws_stop(); return 0; }
+    if (argc == 2 && !strcmp(argv[1], "activate")) return gw_voice_ws_activate(false) == ESP_OK ? 0 : 1;
+    if (argc == 3 && !strcmp(argv[1], "activate") && !strcmp(argv[2], "confirm")) return gw_voice_ws_activate(true) == ESP_OK ? 0 : 1;
     if (argc == 4 && !strcmp(argv[1], "config")) return gw_voice_ws_config(argv[2], argv[3]) == ESP_OK ? 0 : 1;
-    printf("usage: voicews status|start|stop|config <wss-url> <token>\n");
+    printf("usage: voicews status|start|listen|auto|stop|activate [confirm]|config <wss-url> <token>\n");
     return 1;
+}
+
+static int cmd_sd(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "mount")) return gw_sd_init() == ESP_OK ? 0 : 1;
+    if (argc == 2 && !strcmp(argv[1], "status")) { gw_sd_status(); return 0; }
+    printf("usage: sd mount|status\n"); return 1;
+}
+
+static int cmd_wake(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "init")) return gw_wake_init() == ESP_OK ? 0 : 1;
+    if (argc == 2 && !strcmp(argv[1], "start")) return gw_wake_start() == ESP_OK ? 0 : 1;
+    if (argc == 2 && !strcmp(argv[1], "reply")) {
+        gw_wake_pause();
+        gw_cloud_pause();
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_err_t err = gw_sd_play_wake_reply();
+        gw_cloud_resume();
+        gw_wake_resume();
+        printf("wake reply: %s\n", esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
+    }
+    if (argc == 2 && !strcmp(argv[1], "status")) { gw_wake_status(); return 0; }
+    printf("usage: wake init|start|reply|status\n"); return 1;
 }
 
 void gw_console_start(void)
@@ -364,7 +395,9 @@ void gw_console_start(void)
         {.command = "exp",    .help = "exp <pin> <0|1>, set LCD IO expander pin", .func = cmd_exp},
         {.command = "audio",  .help = "audio probe|mic|speaker|opus, audio diagnostics", .func = cmd_audio},
         {.command = "mcp",    .help = "mcp list|call <json>, local MCP tool probe", .func = cmd_mcp},
-        {.command = "voicews", .help = "voicews status|start|stop|config <url> <token>", .func = cmd_voicews},
+        {.command = "voicews", .help = "voicews status|start|listen|stop|activate [confirm]|config <url> <token>", .func = cmd_voicews},
+        {.command = "sd", .help = "sd mount|status, Korvo TF card", .func = cmd_sd},
+        {.command = "wake", .help = "wake init|start|reply|status, offline WakeNet", .func = cmd_wake},
     };
     for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmds[i]));

@@ -16,10 +16,10 @@ docs/                   文档
 
 ## 环境
 
-网关使用 ESP-IDF 6.0.1；节点固件暂保留 ESP-IDF 5.4：
+网关使用 ESP-IDF 6.0.x；节点固件暂保留 ESP-IDF 5.4：
 
 ```bash
-. ~/esp/esp-idf-v6.0.1/export.sh  # 编译 gateway/
+. ~/esp/esp-idf-6.0-git/export.sh  # 编译 gateway/
 # . ~/esp/esp-idf/export.sh       # 编译 node/
 ```
 
@@ -42,9 +42,11 @@ espsecure.py generate_signing_key --version 2 --scheme rsa3072 keys/signing_key.
 
 ```bash
 cd gateway
-idf.py build
+idf.py -B build_wake -DSDKCONFIG=build_wake/sdkconfig build
 idf.py -p /dev/ttyACM1 flash monitor   # Korvo 原生 USB 口（303a:1001），以 ls /dev/serial/by-id 为准
 ```
+
+语音版网关固件使用双 `0x310000` OTA 槽；仍运行旧双 3 MiB 分区表的网关，首次升级须经 USB 同时刷入新的 `gateway/partitions.csv` 分区表和固件，保留 NVS。完成一次迁移后，后续固件才能使用现有 App/远程 OTA 更新。唤醒模型存储在 SD 卡 `/sdcard/srmodels/wn9s_nihaoxiaozhi/`。
 
 节点（按芯片 / 板子选择构建目录）：
 
@@ -98,7 +100,7 @@ ESP-NOW 密钥在 → Mesh protocol 中配置，网关和节点必须一致。
 
 ```bash
 # token：网关串口执行 token
-tools/ota_upload.py 192.168.x.x gateway/build/esp_s3_gateway.bin --token <token>
+tools/ota_upload.py 192.168.x.x gateway/build_wake/esp_s3_gateway.bin --token <token>
 ```
 
 - 网关不校验签名，默认不允许同版本或降级（`--force` 例外）

@@ -35,7 +35,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 LOCAL = ROOT / 'local'
 OWNER, REPO = 'yu_ji_hai', 'app_release'
 API = f'https://gitee.com/api/v5/repos/{OWNER}/{REPO}'
-GW_BIN = ROOT / 'gateway' / 'build' / 'esp_s3_gateway.bin'
+GW_BUILD = 'build_wake'
+GW_BIN = ROOT / 'gateway' / GW_BUILD / 'esp_s3_gateway.bin'
 # 节点固件种类：(编译目录, 额外 idf.py 参数)；工程名和芯片从生成的镜像里读
 NODE_BUILDS = [
     ('build_c3', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3/sdkconfig']),
@@ -160,7 +161,7 @@ def main():
     ap.add_argument('version', help='App 版本 x.y.z')
     ap.add_argument('--notes', default='', help='更新说明')
     ap.add_argument('--gw-version', help='网关固件版本，默认取 gateway/CMakeLists.txt')
-    ap.add_argument('--skip-gateway', action='store_true', help='不重新编译网关，直接用 gateway/build 里的固件')
+    ap.add_argument('--skip-gateway', action='store_true', help=f'不重新编译网关，直接用 gateway/{GW_BUILD} 里的固件')
     ap.add_argument('--skip-nodes', action='store_true', help='不发布节点固件')
     ap.add_argument('--dry-run', action='store_true', help='只编译，不上传、不通知')
     ap.add_argument('--copy-to', help='另外拷贝 APK 到这个目录')
@@ -179,8 +180,9 @@ def main():
     if not a.skip_gateway:
         gw_ver = a.gw_version or re.search(r'set\(PROJECT_VER "([^"]+)"\)',
                                            (ROOT / 'gateway' / 'CMakeLists.txt').read_text()).group(1)
-        idf = os.environ.get('IDF_PATH', str(pathlib.Path.home() / 'esp' / 'esp-idf'))
-        run(f'. "{idf}/export.sh" >/dev/null && idf.py -DPROJECT_VER={gw_ver} build', cwd=ROOT / 'gateway')
+        idf = os.environ.get('GATEWAY_IDF_PATH', str(pathlib.Path.home() / 'esp' / 'esp-idf-6.0-git'))
+        run(f'. "{idf}/export.sh" >/dev/null && idf.py -B {GW_BUILD} '
+            f'-DSDKCONFIG={GW_BUILD}/sdkconfig -DPROJECT_VER={gw_ver} build', cwd=ROOT / 'gateway')
     project, gw_ver = fw_version(GW_BIN)
     if project != 'esp_s3_gateway':
         die(f'固件工程名是 {project}')

@@ -198,7 +198,8 @@ static int64_t set_timeout_us(const gw_node_t *n)
 static int set_max_tries(const gw_node_t *n)
 {
     if (n->lp_interval_ms && n->lp_window_ms) {
-        return n->lp_interval_ms * 1000LL / set_timeout_us(n) + 2;
+        /* Cover two complete RX periods, including scheduler/Wi-Fi jitter. */
+        return n->lp_interval_ms * 2000LL / set_timeout_us(n) + 2;
     }
     return SET_MAX_TRIES;
 }
@@ -363,12 +364,11 @@ static void handle_state(const rx_msg_t *m, int type)
         }
     }
 
-    if (st->ack_seq != 0) {
-        for (int i = 0; i < MP_MAX_CH; i++) {
-            if (s_pending[idx][i].active && s_pending[idx][i].seq == st->ack_seq) {
-                s_pending[idx][i].active = false;
-            }
-        }
+    /* A transport ACK alone does not prove that the output changed. Preserve
+     * the requested value until the node reports the matching actual state. */
+    for (int i = 0; i < cnt; ++i) {
+        if (s_pending[idx][i].active && n->value[i] == s_pending[idx][i].value)
+            s_pending[idx][i].active = false;
     }
 
     if (n->resync) {
@@ -394,6 +394,11 @@ static void handle_state(const rx_msg_t *m, int type)
         mp_hb_ack_t ack = {.flags = n->stay_awake ? MP_HB_F_STAY_AWAKE : 0};
         mp_hdr_init(&ack.hdr, MP_HB_ACK, st->hdr.seq);
         esp_now_send(n->mac, (const uint8_t *)&ack, sizeof(ack));
+        /* The node just transmitted inside its RX window. Retry pending SET
+         * immediately instead of relying only on the periodic timer. */
+        for (int ch = 0; ch < n->n_ch; ++ch) {
+            if (s_pending[idx][ch].active) send_set(idx, ch);
+        }
     }
 
     if (!was_online) {
@@ -428,7 +433,11 @@ static void periodic(void)
                 continue;
             }
             if (p->tries >= set_max_tries(n)) {
-                p->active = false;
+                /* Keep the user's desired value until node state confirms it.
+                 * Otherwise the next heartbeat overwrites desired with the
+                 * stale actual value and a failed OFF command turns back ON. */
+                p->tries = 0;
+                p->next_us = now + (int64_t)(n->lp_interval_ms ? n->lp_interval_ms : 1000) * 1000;
                 if (n->sleep_s) {
                     ESP_LOGI(TAG, "node %d asleep, ch %d = %u queued until it wakes", i, ch, p->value);
                 } else {

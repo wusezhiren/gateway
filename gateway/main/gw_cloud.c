@@ -30,6 +30,8 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static esp_mqtt_client_handle_t s_client;
 static TaskHandle_t s_task;
 static volatile bool s_reconfig;
+static volatile bool s_paused;
+static volatile bool s_pause_done;
 static volatile bool s_dirty = true;
 
 const char *gw_cloud_id(void)
@@ -261,9 +263,21 @@ static void client_start(void)
         return;
     }
     esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, mqtt_event, NULL);
-    esp_mqtt_client_start(s_client);
+    esp_err_t err = esp_mqtt_client_start(s_client);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "client start failed: %s; retry later", esp_err_to_name(err));
+        esp_mqtt_client_destroy(s_client);
+        s_client = NULL;
+        return;
+    }
     ESP_LOGI(TAG, "connecting to %s:%u as %s", st.host, st.port, client_id);
 }
+
+/* Pause is requested from arbitrary tasks; the cloud task owns the MQTT
+ * handle and must perform stop/destroy itself to avoid racing esp-mqtt. */
+void gw_cloud_pause(void) { s_pause_done = false; s_paused = true; gw_cloud_notify(); }
+void gw_cloud_resume(void) { s_paused = false; s_pause_done = false; s_reconfig = true; gw_cloud_notify(); }
+bool gw_cloud_is_paused(void) { return s_paused && s_pause_done; }
 
 static void cloud_task(void *arg)
 {
@@ -277,6 +291,11 @@ static void cloud_task(void *arg)
         }
         gw_cloud_status_t st;
         gw_cloud_get_status(&st);
+        if (s_paused) {
+            client_stop();
+            s_pause_done = true;
+            continue;
+        }
         gw_wifi_status_t ws;
         gw_wifi_get_status(&ws);
         /* 连上路由器后才启动，之后断线由 esp-mqtt 自己重连 */

@@ -9,7 +9,7 @@ import java.nio.ByteOrder
 data class FwImage(val project: String, val version: String, val size: Long)
 
 object Firmware {
-    /** App 内置的网关固件（发版时由 Gradle 从 gateway/build 拷入） */
+    /** App 内置的网关固件（发版时由 Gradle 从 gateway/build_wake 拷入） */
     const val GATEWAY_ASSET = "firmware/gateway.bin"
     const val GATEWAY_PROJECT = "esp_s3_gateway"
 

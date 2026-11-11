@@ -72,9 +72,9 @@ android {
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/fwassets"))
 }
 
-// 把编译好的网关固件（已签名）打进 App：assets/firmware/gateway.bin
+// 把编译好的网关固件打进 App：assets/firmware/gateway.bin
 val copyGatewayFirmware by tasks.registering(Copy::class) {
-    from(rootProject.file("../gateway/build/esp_s3_gateway.bin"))
+    from(rootProject.file("../gateway/build_wake/esp_s3_gateway.bin"))
     into(layout.buildDirectory.dir("generated/fwassets/firmware"))
     rename { "gateway.bin" }
 }

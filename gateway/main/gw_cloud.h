@@ -34,3 +34,6 @@ const char *gw_cloud_id(void);
 
 /* 状态有变化，尽快上报（任意任务可调，不阻塞） */
 void gw_cloud_notify(void);
+void gw_cloud_pause(void);
+void gw_cloud_resume(void);
+bool gw_cloud_is_paused(void);

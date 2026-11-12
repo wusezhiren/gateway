@@ -32,3 +32,5 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I"$root/gateway/main" "$root/gateway/tests/gw_ota_policy_test.c" \
   "$root/gateway/main/gw_ota_policy.c" -o "$build/gw_ota_policy_test"
 "$build/gw_ota_policy_test"
+bash "$root/components/voice_core/tests/test_host.sh"
+bash "$root/listen_clouds/tests/test_host.sh"

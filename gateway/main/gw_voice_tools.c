@@ -1,55 +1,28 @@
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include "esp_app_desc.h"
 #include "gw_api.h"
 #include "gw_voice_tools.h"
+#include "voice_core/voice_mcp_json.h"
 
-static cJSON *reply(const cJSON *id, cJSON *result, int code, const char *message)
-{
-    cJSON *root = cJSON_CreateObject();
-    if (!root) {
-        cJSON_Delete(result);
-        return NULL;
-    }
-    cJSON_AddStringToObject(root, "jsonrpc", "2.0");
-    if (id && (cJSON_IsString(id) || cJSON_IsNumber(id))) {
-        cJSON_AddItemToObject(root, "id", cJSON_Duplicate(id, true));
-    } else {
-        cJSON_AddNullToObject(root, "id");
-    }
-    if (message) {
-        cJSON_Delete(result);
-        cJSON *error = cJSON_AddObjectToObject(root, "error");
-        cJSON_AddNumberToObject(error, "code", code);
-        cJSON_AddStringToObject(error, "message", message);
-    } else {
-        cJSON_AddItemToObject(root, "result", result ? result : cJSON_CreateObject());
-    }
-    return root;
-}
+static voice_mcp_t s_tools;
+static bool s_registered;
+static bool valid_mac(const char *mac);
+static bool integer_in_range(const cJSON *value, int max);
 
-static cJSON *tool_schema(const char *name, const char *description, bool setting)
+static bool valid_set_args(void *ctx, const char *json)
 {
-    cJSON *tool = cJSON_CreateObject();
-    cJSON_AddStringToObject(tool, "name", name);
-    cJSON_AddStringToObject(tool, "description", description);
-    cJSON *schema = cJSON_AddObjectToObject(tool, "inputSchema");
-    cJSON_AddStringToObject(schema, "type", "object");
-    cJSON_AddBoolToObject(schema, "additionalProperties", false);
-    cJSON *properties = cJSON_AddObjectToObject(schema, "properties");
-    if (setting) {
-        cJSON *mac = cJSON_AddObjectToObject(properties, "mac");
-        cJSON_AddStringToObject(mac, "type", "string");
-        cJSON *ch = cJSON_AddObjectToObject(properties, "ch");
-        cJSON_AddStringToObject(ch, "type", "integer");
-        cJSON *value = cJSON_AddObjectToObject(properties, "value");
-        cJSON_AddStringToObject(value, "type", "integer");
-        cJSON *required = cJSON_AddArrayToObject(schema, "required");
-        cJSON_AddItemToArray(required, cJSON_CreateString("mac"));
-        cJSON_AddItemToArray(required, cJSON_CreateString("ch"));
-        cJSON_AddItemToArray(required, cJSON_CreateString("value"));
-    }
-    return tool;
+    (void)ctx;
+    cJSON *args = cJSON_ParseWithOpts(json, NULL, true);
+    if (!cJSON_IsObject(args)) { cJSON_Delete(args); return false; }
+    const char *mac = cJSON_GetStringValue(cJSON_GetObjectItem(args, "mac"));
+    const cJSON *ch = cJSON_GetObjectItem(args, "ch");
+    const cJSON *value = cJSON_GetObjectItem(args, "value");
+    bool ok = valid_mac(mac) && integer_in_range(ch, 255) &&
+              integer_in_range(value, 65535) && cJSON_GetArraySize(args) == 3;
+    cJSON_Delete(args);
+    return ok;
 }
 
 static cJSON *tool_result(const cJSON *payload, bool error)
@@ -90,81 +63,87 @@ static bool valid_mac(const char *mac)
     return true;
 }
 
-cJSON *gw_voice_tools_handle(const cJSON *request)
+static voice_status_t write_result(cJSON *result, char *out, size_t capacity)
 {
-    if (!cJSON_IsObject(request)) {
-        return reply(NULL, NULL, -32600, "invalid request");
-    }
-    const cJSON *id = cJSON_GetObjectItem(request, "id");
-    const char *version = cJSON_GetStringValue(cJSON_GetObjectItem(request, "jsonrpc"));
-    const char *method = cJSON_GetStringValue(cJSON_GetObjectItem(request, "method"));
-    if (method && !strcmp(method, "initialize")) {
-        cJSON *result = cJSON_CreateObject();
-        cJSON_AddStringToObject(result, "protocolVersion", "2024-11-05");
-        cJSON_AddObjectToObject(result, "capabilities");
-        cJSON *info = cJSON_AddObjectToObject(result, "serverInfo");
-        cJSON_AddStringToObject(info, "name", "esp-s3-gateway");
-        cJSON_AddStringToObject(info, "version", esp_app_get_description()->version);
-        return reply(id, result, 0, NULL);
-    }
-    if (!version || strcmp(version, "2.0") || !method ||
-        !id || !(cJSON_IsNumber(id) || cJSON_IsString(id))) {
-        return reply(id, NULL, -32600, "invalid request");
-    }
-    if (!strcmp(method, "tools/list")) {
-        cJSON *result = cJSON_CreateObject();
-        cJSON *tools = cJSON_AddArrayToObject(result, "tools");
-        cJSON_AddItemToArray(tools, tool_schema("gateway.nodes.list",
-            "List paired ESP-NOW nodes and actual channel values", false));
-        cJSON_AddItemToArray(tools, tool_schema("gateway.node.set",
-            "Send a channel setting to an already paired ESP-NOW node", true));
-        return reply(id, result, 0, NULL);
-    }
-    if (strcmp(method, "tools/call")) {
-        return reply(id, NULL, -32601, "method not found");
-    }
-    const cJSON *params = cJSON_GetObjectItem(request, "params");
-    if (!cJSON_IsObject(params)) {
-        return reply(id, NULL, -32602, "params required");
-    }
-    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(params, "name"));
-    const cJSON *args = cJSON_GetObjectItem(params, "arguments");
-    if (!name || !cJSON_IsObject(args)) {
-        return reply(id, NULL, -32602, "tool name and arguments required");
-    }
-    if (!strcmp(name, "gateway.nodes.list")) {
-        if (args->child) {
-            return reply(id, NULL, -32602, "list takes no arguments");
-        }
-        cJSON *nodes = gw_api_nodes_json();
-        cJSON *result = tool_result(nodes, false);
-        cJSON_Delete(nodes);
-        return reply(id, result, 0, NULL);
-    }
-    if (strcmp(name, "gateway.node.set")) {
-        return reply(id, NULL, -32601, "unknown tool");
-    }
-    const char *mac = cJSON_GetStringValue(cJSON_GetObjectItem(args, "mac"));
-    const cJSON *ch = cJSON_GetObjectItem(args, "ch");
-    const cJSON *value = cJSON_GetObjectItem(args, "value");
-    if (!valid_mac(mac) || !integer_in_range(ch, 255) || !integer_in_range(value, 65535) ||
-        cJSON_GetArraySize(args) != 3) {
-        return reply(id, NULL, -32602, "invalid mac, ch or value");
-    }
+    if (!result) return VOICE_ERR_SIZE;
+    char *text = cJSON_PrintUnformatted(result);
+    cJSON_Delete(result);
+    if (!text) return VOICE_ERR_SIZE;
+    size_t len = strlen(text);
+    if (len >= capacity) { cJSON_free(text); return VOICE_ERR_SIZE; }
+    memcpy(out, text, len + 1);
+    cJSON_free(text);
+    return VOICE_OK;
+}
+
+static voice_status_t list_nodes(void *ctx, const char *json, char *out, size_t capacity)
+{
+    (void)ctx; (void)json;
+    cJSON *nodes = gw_api_nodes_json();
+    cJSON *result = tool_result(nodes, false);
+    cJSON_Delete(nodes);
+    return write_result(result, out, capacity);
+}
+
+static voice_status_t set_node(void *ctx, const char *json, char *out, size_t capacity)
+{
+    (void)ctx;
+    cJSON *args = cJSON_ParseWithOpts(json, NULL, true);
+    if (!args) return VOICE_ERR_ARGUMENT;
     cJSON *command = cJSON_CreateObject();
     cJSON_AddStringToObject(command, "op", "set");
-    cJSON_AddStringToObject(command, "mac", mac);
-    cJSON_AddNumberToObject(command, "ch", ch->valueint);
-    cJSON_AddNumberToObject(command, "value", value->valueint);
-    const char *err = gw_api_exec(command);
+    cJSON_AddStringToObject(command, "mac", cJSON_GetStringValue(cJSON_GetObjectItem(args, "mac")));
+    cJSON_AddNumberToObject(command, "ch", cJSON_GetObjectItem(args, "ch")->valueint);
+    cJSON_AddNumberToObject(command, "value", cJSON_GetObjectItem(args, "value")->valueint);
+    const char *error = gw_api_exec(command);
     cJSON_Delete(command);
+    cJSON_Delete(args);
     cJSON *status = cJSON_CreateObject();
-    if (err) {
-        cJSON_AddStringToObject(status, "error", err);
-    } else {
-        cJSON_AddStringToObject(status, "status", "accepted_pending_node_report");
-    }
-    cJSON *result = tool_result(status, err != NULL);
+    cJSON_AddStringToObject(status, error ? "error" : "status",
+                            error ? error : "accepted_pending_node_report");
+    cJSON *result = tool_result(status, error != NULL);
     cJSON_Delete(status);
-    return reply(id, result, 0, NULL);
+    return write_result(result, out, capacity);
+}
+
+static bool no_args(void *ctx, const char *json)
+{
+    (void)ctx;
+    cJSON *args = cJSON_ParseWithOpts(json, NULL, true);
+    bool valid = cJSON_IsObject(args) && !args->child;
+    cJSON_Delete(args);
+    return valid;
+}
+
+static void register_tools(void)
+{
+    if (s_registered) return;
+    static const char list_schema[] =
+        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{}}";
+    static const char set_schema[] =
+        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+        "\"mac\":{\"type\":\"string\"},\"ch\":{\"type\":\"integer\"},"
+        "\"value\":{\"type\":\"integer\"}},\"required\":[\"mac\",\"ch\",\"value\"]}";
+    voice_mcp_register_tool(&s_tools, "gateway.nodes.list",
+        "List paired ESP-NOW nodes and actual channel values", list_schema,
+        no_args, list_nodes, NULL);
+    voice_mcp_register_tool(&s_tools, "gateway.node.set",
+        "Send a channel setting to an already paired ESP-NOW node", set_schema,
+        valid_set_args, set_node, NULL);
+    s_registered = true;
+}
+
+cJSON *gw_voice_tools_handle(const cJSON *request)
+{
+    register_tools();
+    char *json = cJSON_PrintUnformatted(request);
+    if (!json) return NULL;
+    char *response = malloc(8192);
+    if (!response) { cJSON_free(json); return NULL; }
+    voice_status_t err = voice_mcp_handle_json_ex(&s_tools, json, "esp-s3-gateway",
+        esp_app_get_description()->version, response, 8192);
+    cJSON_free(json);
+    cJSON *result = err == VOICE_OK ? cJSON_Parse(response) : NULL;
+    free(response);
+    return result;
 }

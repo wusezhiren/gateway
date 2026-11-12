@@ -17,6 +17,8 @@
 #include "gw_wake.h"
 #include "tts_resample.h"
 #include "voice_vad.h"
+#include "listen_clouds/protocol.h"
+#include "voice_core/voice_core.h"
 #include "esp_audio_enc.h"
 #include "esp_opus_enc.h"
 #include "esp_audio_enc_reg.h"
@@ -69,6 +71,15 @@ static const audio_codec_ctrl_if_t *s_tts_ctrl;
 static const audio_codec_gpio_if_t *s_tts_gpio;
 static i2s_chan_handle_t s_tts_tx;
 static bool s_tts_tx_borrowed;
+static voice_core_t s_voice_session;
+static SemaphoreHandle_t s_voice_session_lock;
+static voice_status_t session_audio_open(void *ctx, voice_audio_direction_t direction)
+{
+    (void)ctx; (void)direction;
+    /* The Korvo capture and TTS workers own the actual I2S resources. */
+    return VOICE_OK;
+}
+static void session_audio_close(void *ctx) { (void)ctx; }
 static uint8_t *s_tts_pcm;
 static int16_t *s_tts_stereo;
 static tts_resample_t s_tts_resample;
@@ -112,6 +123,8 @@ static bool tts_start_worker(void)
 
 static void tts_close(void)
 {
+    if (voice_core_state(&s_voice_session) == VOICE_STATE_PLAYING)
+        voice_core_on_tts_end(&s_voice_session, voice_core_generation(&s_voice_session));
     if (s_tts_dec) { esp_audio_dec_close(s_tts_dec); s_tts_dec = NULL; esp_audio_dec_unregister(ESP_AUDIO_TYPE_OPUS); }
     if (s_tts_codec) { esp_codec_dev_close(s_tts_codec); esp_codec_dev_delete(s_tts_codec); s_tts_codec = NULL; }
     if (s_tts_codec_if) { audio_codec_delete_codec_if(s_tts_codec_if); s_tts_codec_if = NULL; }
@@ -127,6 +140,9 @@ static void tts_close(void)
 static esp_err_t tts_open(void)
 {
     if (s_tts_dec) return ESP_OK;
+    if (voice_core_state(&s_voice_session) == VOICE_STATE_WAITING_REPLY &&
+        voice_core_on_tts_start(&s_voice_session, voice_core_generation(&s_voice_session)) != VOICE_OK)
+        return ESP_ERR_INVALID_STATE;
     esp_opus_dec_cfg_t dc = ESP_OPUS_DEC_CONFIG_DEFAULT();
     dc.sample_rate = 24000; dc.channel = 1; dc.frame_duration = ESP_OPUS_DEC_FRAME_DURATION_60_MS;
     dc.self_delimited = false;
@@ -253,7 +269,10 @@ static esp_err_t listen_pcm(const int16_t *samples, size_t count, void *arg)
         return ESP_OK;
     }
     encode_pcm(samples, count, x);
-    if (x->err == ESP_OK && voice_vad_should_stop(&x->vad, false)) return ESP_ERR_INVALID_STATE;
+    if (x->err == ESP_OK && voice_vad_should_stop(&x->vad, false)) {
+        x->stop_requested = true;
+        return ESP_ERR_INVALID_STATE;
+    }
     return x->err;
 }
 
@@ -270,11 +289,32 @@ static void voice_capture_task(void *arg)
 }
 
 static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_samples, bool auto_mode, bool continue_mic,
-                                        bool probe_barge)
+                                         bool probe_barge)
 {
+    if (!s_voice_session_lock || xSemaphoreTake(s_voice_session_lock, 0) != pdTRUE)
+        return ESP_ERR_INVALID_STATE;
+    voice_ports_t ports = {.audio_open = session_audio_open, .audio_close = session_audio_close,
+                            .supports_duplex = true};
+    if (voice_core_init(&s_voice_session, VOICE_AUDIO_FULL_DUPLEX, &ports) != VOICE_OK ||
+        voice_core_on_wake(&s_voice_session) != VOICE_OK) {
+        xSemaphoreGive(s_voice_session_lock);
+        return ESP_FAIL;
+    }
     int64_t session_started_us = esp_timer_get_time();
     s_tts_done = false;
     s_tts_cancelled = false;
+    int16_t *handoff = NULL;
+    size_t handoff_samples = 0;
+    if (continue_mic && !file_pcm) {
+        handoff = heap_caps_malloc(16000 * 4 * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!handoff) { voice_core_cancel(&s_voice_session); xSemaphoreGive(s_voice_session_lock); return ESP_ERR_NO_MEM; }
+        handoff_samples = gw_wake_take_handoff(handoff, 16000 * 4);
+        ESP_LOGI(TAG, "handoff buffered %.2fs", (double)handoff_samples / 16000.0);
+        if (!handoff_samples) {
+            free(handoff); voice_core_cancel(&s_voice_session); xSemaphoreGive(s_voice_session_lock);
+            return ESP_ERR_TIMEOUT;
+        }
+    }
     gw_cloud_status_t cloud;
     gw_cloud_get_status(&cloud);
     if (cloud.connected) {
@@ -289,48 +329,36 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
         esp_err_t start_err = gw_voice_ws_start();
         if (start_err != ESP_OK) {
             if (cloud.connected) gw_cloud_resume();
+            free(handoff);
+            voice_core_cancel(&s_voice_session);
+            xSemaphoreGive(s_voice_session_lock);
             return start_err;
         }
         for (int i = 0; i < 50 && !s_hello_ok; ++i) vTaskDelay(pdMS_TO_TICKS(100));
     }
     if (!s_client || !s_hello_ok || !esp_websocket_client_is_connected(s_client)) {
         if (cloud.connected) gw_cloud_resume();
+        free(handoff);
+        voice_core_cancel(&s_voice_session);
+        xSemaphoreGive(s_voice_session_lock);
         return ESP_ERR_TIMEOUT;
     }
     /* The server sends MCP initialize/tools/list immediately after hello. Let
      * those replies complete before allocating the Opus encoder and I2S DMA. */
     for (int i = 0; i < 100 && !s_mcp_ready; ++i) vTaskDelay(pdMS_TO_TICKS(20));
     int64_t ready_us = esp_timer_get_time();
-    int16_t *handoff = NULL;
-    size_t handoff_samples = 0;
-    if (continue_mic && !file_pcm) {
-        handoff = heap_caps_malloc(16000 * 4 * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!handoff) {
-            gw_voice_ws_stop();
-            if (cloud.connected) gw_cloud_resume();
-            return ESP_ERR_NO_MEM;
-        }
-        handoff_samples = gw_wake_take_handoff(handoff, 16000 * 4);
-        ESP_LOGI(TAG, "handoff buffered %.2fs", (double)handoff_samples / 16000.0);
-        if (!handoff_samples) {
-            free(handoff);
-            gw_voice_ws_stop();
-            if (cloud.connected) gw_cloud_resume();
-            return ESP_ERR_TIMEOUT;
-        }
-    }
-    cJSON *m = cJSON_CreateObject();
-    cJSON_AddStringToObject(m, "session_id", s_session_id);
-    cJSON_AddStringToObject(m, "type", "listen");
-    cJSON_AddStringToObject(m, "state", "start");
-    cJSON_AddStringToObject(m, "mode", auto_mode ? "auto" : "manual");
-    char *text = cJSON_PrintUnformatted(m);
-    int start_sent = text ? esp_websocket_client_send_text(s_client, text, strlen(text), pdMS_TO_TICKS(3000)) : -1;
+    char listen_message[256];
+    lc_status_t encoded = lc_v1_listen_start(s_session_id, auto_mode,
+                                                    listen_message, sizeof(listen_message));
+    int start_sent = encoded == LC_OK ? esp_websocket_client_send_text(s_client, listen_message,
+                                                        strlen(listen_message), pdMS_TO_TICKS(3000)) : -1;
     ESP_LOGI(TAG, "listen start sent=%d", start_sent);
-    cJSON_free(text); cJSON_Delete(m);
     if (start_sent <= 0) {
         gw_voice_ws_stop();
         if (cloud.connected) gw_cloud_resume();
+        free(handoff);
+        voice_core_cancel(&s_voice_session);
+        xSemaphoreGive(s_voice_session_lock);
         return ESP_FAIL;
     }
 
@@ -341,6 +369,9 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
     if (esp_opus_enc_register() != ESP_AUDIO_ERR_OK) {
         gw_voice_ws_stop();
         if (cloud.connected) gw_cloud_resume();
+        free(handoff);
+        voice_core_cancel(&s_voice_session);
+        xSemaphoreGive(s_voice_session_lock);
         return ESP_FAIL;
     }
     esp_audio_enc_config_t cc = {.type=ESP_AUDIO_TYPE_OPUS, .cfg=&cfg, .cfg_sz=sizeof(cfg)};
@@ -350,6 +381,9 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
         esp_audio_enc_unregister(ESP_AUDIO_TYPE_OPUS);
         gw_voice_ws_stop();
         if (cloud.connected) gw_cloud_resume();
+        free(handoff);
+        voice_core_cancel(&s_voice_session);
+        xSemaphoreGive(s_voice_session_lock);
         return ESP_FAIL;
     }
     int pcm_bytes;
@@ -379,6 +413,8 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
                 size_t n = file_samples - off;
                 if (n > 512) n = 512;
                 x.err = listen_pcm(file_pcm + off, n, &x);
+                if (x.err == ESP_ERR_INVALID_STATE && x.stop_requested) x.err = ESP_OK;
+                if (x.stop_requested) break;
                 vTaskDelay(pdMS_TO_TICKS(n * 1000 / 16000));
             }
         } else {
@@ -414,15 +450,14 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
                             (long long)((upload_done_us - x.capture_finished_us) / 1000),
                             (double)x.sent_samples / 16000.0);
     free(x.pcm); free(x.opus); esp_audio_enc_close(x.enc); esp_audio_enc_unregister(ESP_AUDIO_TYPE_OPUS);
+    voice_core_on_speech_end(&s_voice_session);
     if (!auto_mode) {
-        cJSON *stop = cJSON_CreateObject(); cJSON_AddStringToObject(stop,"session_id",s_session_id);
-        cJSON_AddStringToObject(stop,"type","listen"); cJSON_AddStringToObject(stop,"state","stop");
-        text=cJSON_PrintUnformatted(stop);
-        int stop_sent = text && s_client && esp_websocket_client_is_connected(s_client) ?
-            esp_websocket_client_send_text(s_client,text,strlen(text),pdMS_TO_TICKS(3000)) : -1;
+        char stop_message[192];
+        lc_status_t stop_encoded = lc_v1_listen_stop(s_session_id, stop_message, sizeof(stop_message));
+        int stop_sent = stop_encoded == LC_OK && s_client && esp_websocket_client_is_connected(s_client) ?
+            esp_websocket_client_send_text(s_client,stop_message,strlen(stop_message),pdMS_TO_TICKS(3000)) : -1;
         ESP_LOGI(TAG, "listen stop sent=%d opus_frames=%u opus_bytes=%u",
                  stop_sent, (unsigned)x.sent_frames, (unsigned)x.sent_bytes);
-        cJSON_free(text); cJSON_Delete(stop);
         if (stop_sent <= 0 && x.err == ESP_OK) x.err = ESP_FAIL;
     } else {
         ESP_LOGI(TAG, "auto listen frames=%u bytes=%u", (unsigned)x.sent_frames, (unsigned)x.sent_bytes);
@@ -445,6 +480,8 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
         vTaskDelay(pdMS_TO_TICKS(100));
     if (barge_started && gw_wake_barge_in_detected()) {
         ESP_LOGI(TAG, "barge-in: cancelling old TTS/session");
+        if (voice_core_state(&s_voice_session) == VOICE_STATE_PLAYING)
+            voice_core_on_barge_in(&s_voice_session);
         s_tts_cancelled = true;
     }
     s_tts_end_requested = true;
@@ -455,6 +492,8 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
      * connects. The next session takes the buffered audio before opening its RX. */
     if (barge_started && !gw_wake_barge_in_detected()) gw_wake_end_barge_in();
     gw_voice_ws_stop();
+    voice_core_cancel(&s_voice_session);
+    xSemaphoreGive(s_voice_session_lock);
     if (cloud.connected) gw_cloud_resume();
     return x.err;
 }
@@ -675,23 +714,9 @@ esp_err_t gw_voice_ws_activate(bool confirm)
 
 static void send_hello(void)
 {
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "type", "hello");
-    cJSON_AddNumberToObject(root, "version", 1);
-    cJSON *features = cJSON_AddObjectToObject(root, "features");
-    cJSON_AddBoolToObject(features, "mcp", true);
-    cJSON_AddStringToObject(root, "transport", "websocket");
-    cJSON *audio = cJSON_AddObjectToObject(root, "audio_params");
-    cJSON_AddStringToObject(audio, "format", "opus");
-    cJSON_AddNumberToObject(audio, "sample_rate", 16000);
-    cJSON_AddNumberToObject(audio, "channels", 1);
-    cJSON_AddNumberToObject(audio, "frame_duration", 60);
-    char *text = cJSON_PrintUnformatted(root);
-    if (text) {
+    char text[256];
+    if (lc_v1_hello(text, sizeof(text)) == LC_OK)
         esp_websocket_client_send_text(s_client, text, strlen(text), pdMS_TO_TICKS(3000));
-        cJSON_free(text);
-    }
-    cJSON_Delete(root);
 }
 
 static void on_event(void *arg, esp_event_base_t base, int32_t event_id, void *data)
@@ -786,6 +811,8 @@ static void on_event(void *arg, esp_event_base_t base, int32_t event_id, void *d
 
 esp_err_t gw_voice_ws_init(void)
 {
+    if (!s_voice_session_lock) s_voice_session_lock = xSemaphoreCreateMutex();
+    if (!s_voice_session_lock) return ESP_ERR_NO_MEM;
     load_config();
     return ESP_OK;
 }

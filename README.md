@@ -8,6 +8,7 @@ ESP-NOW 星型组网：酷世 KS_S3_KORVO_V4 作网关，ESP32-C3 / ESP32-S3 核
 ```
 components/meshproto/   网关与节点共用的协议定义
 gateway/                网关固件（ESP32-S3）
+gateway_s31/            ESP32-S31 网关移植工程（目前仅板级引导）
 node/                   节点固件（ESP32-C3 / ESP32-S3）
 android/                手机 App（Kotlin + Compose）
 keys/                   签名私钥（不入库）
@@ -22,6 +23,10 @@ docs/                   文档
 . ~/esp/esp-idf-6.0-git/export.sh  # 编译 gateway/
 # . ~/esp/esp-idf/export.sh       # 编译 node/
 ```
+
+另装有 `~/esp/esp-idf-master`（IDF 6.2 开发版），工具链和 Python 环境同时支持 `esp32s3`、`esp32s31`、`esp32c3`。进入需要使用 master 的终端后运行 `. ~/esp/esp-idf-master/export.sh`，然后执行 `idf.py --preview --list-targets` 核对目标；S31 构建命令见 [gateway_s31/README.md](gateway_s31/README.md)，移植顺序见 [gateway_s31/PLAN.md](gateway_s31/PLAN.md)。原 S3/C3 的已验证构建仍使用上面的 IDF 6.0/5.4 环境，不要复用不同 IDF 版本的构建目录。
+
+云端 v1 报文组件由 Git 子模块 `listen_clouds/` 提供（独立仓库 `https://github.com/wusezhiren/listen_clouds`）。克隆时使用 `git clone --recurse-submodules`，已有仓库执行 `git submodule update --init`；`tools/test_host.sh` 也会运行其协议测试。
 
 ## 签名密钥
 

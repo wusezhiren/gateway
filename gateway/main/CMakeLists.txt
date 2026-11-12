@@ -4,6 +4,6 @@ idf_component_register(SRCS "main.c" "gw_wifi.c" "gw_link.c" "gw_set_policy.c" "
                             "ui/fonts/font_cn_16.c" "ui/fonts/font_cn_24.c"
                         INCLUDE_DIRS "." "ui"
                        EMBED_FILES "prov.html"
-                       REQUIRES meshproto esp_wifi esp_timer app_update esp_netif nvs_flash console
+                        REQUIRES meshproto voice_core listen_clouds esp_wifi esp_timer app_update esp_netif nvs_flash console
                                 esp_http_server cjson esp_adc esp_driver_spi esp_driver_i2c esp_lcd mqtt esp-tls
                                   esp_http_client mbedtls esp_driver_i2s esp_codec_dev esp_audio_codec esp_websocket_client fatfs sdmmc esp-sr)

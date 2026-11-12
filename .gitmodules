@@ -1,3 +1,31 @@
 [submodule "listen_clouds"]
 	path = listen_clouds
 	url = https://github.com/wusezhiren/listen_clouds.git
+[submodule "gateway"]
+	path = gateway
+	url = https://github.com/gateway-esp/gateway-s3.git
+	branch = main
+[submodule "gateway_s31"]
+	path = gateway_s31
+	url = https://github.com/gateway-esp/gateway-s31.git
+	branch = main
+[submodule "android"]
+	path = android
+	url = https://github.com/gateway-esp/android.git
+	branch = main
+[submodule "node"]
+	path = node
+	url = https://github.com/gateway-esp/node-c3.git
+	branch = main
+[submodule "node_s3"]
+	path = node_s3
+	url = https://github.com/gateway-esp/node-s3.git
+	branch = main
+[submodule "components/meshproto"]
+	path = components/meshproto
+	url = https://github.com/gateway-esp/meshproto.git
+	branch = main
+[submodule "components/voice_core"]
+	path = components/voice_core
+	url = https://github.com/gateway-esp/voice-core.git
+	branch = main

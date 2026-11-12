@@ -1,4 +1,4 @@
-# esp-s3 组网
+# 家庭网关总仓
 
 ESP-NOW 星型组网：酷世 KS_S3_KORVO_V4 作网关，ESP32-C3 / ESP32-S3 核心板作节点。
 原组网计划与进度见 [docs/PLAN.md](docs/PLAN.md)，原网关语音中控迭代见 [docs/voice-plan.md](docs/voice-plan.md)，协议见 [docs/protocol.md](docs/protocol.md)。
@@ -6,11 +6,14 @@ ESP-NOW 星型组网：酷世 KS_S3_KORVO_V4 作网关，ESP32-C3 / ESP32-S3 核
 ## 目录
 
 ```
-components/meshproto/   网关与节点共用的协议定义
-gateway/                网关固件（ESP32-S3）
-gateway_s31/            ESP32-S31 网关移植工程（目前仅板级引导）
-node/                   节点固件（ESP32-C3 / ESP32-S3）
-android/                手机 App（Kotlin + Compose）
+components/meshproto/   ESP-NOW 共享协议子仓
+components/voice_core/  可移植语音核心子仓
+listen_clouds/          云端语音协议子仓
+gateway/                ESP32-S3 网关子仓
+gateway_s31/            ESP32-S31 网关子仓
+node/                   ESP32-C3 节点子仓
+node_s3/                ESP32-S3 节点子仓
+android/                Android App 子仓
 keys/                   签名私钥（不入库）
 docs/                   文档
 ```
@@ -26,7 +29,7 @@ docs/                   文档
 
 另装有 `~/esp/esp-idf-master`（IDF 6.2 开发版），工具链和 Python 环境同时支持 `esp32s3`、`esp32s31`、`esp32c3`。进入需要使用 master 的终端后运行 `. ~/esp/esp-idf-master/export.sh`，然后执行 `idf.py --preview --list-targets` 核对目标；S31 构建命令见 [gateway_s31/README.md](gateway_s31/README.md)，移植顺序见 [gateway_s31/PLAN.md](gateway_s31/PLAN.md)。原 S3/C3 的已验证构建仍使用上面的 IDF 6.0/5.4 环境，不要复用不同 IDF 版本的构建目录。
 
-云端 v1 报文组件由 Git 子模块 `listen_clouds/` 提供（独立仓库 `https://github.com/wusezhiren/listen_clouds`）。克隆时使用 `git clone --recurse-submodules`，已有仓库执行 `git submodule update --init`；`tools/test_host.sh` 也会运行其协议测试。
+各工程均以 Git 子模块固定版本；总仓位于 <https://github.com/wusezhiren/gateway>。克隆时使用 `git clone --recurse-submodules https://github.com/wusezhiren/gateway.git`，已有仓库执行 `git submodule update --init --recursive`。在子仓修改代码后先提交并推送该子仓，再在总仓提交更新后的子仓指针。`tools/test_host.sh` 会运行共享协议、语音、节点与 S31 主机测试。
 
 ## 签名密钥
 
@@ -53,13 +56,15 @@ idf.py -p /dev/ttyACM1 flash monitor   # Korvo 原生 USB 口（303a:1001），�
 
 语音版网关固件使用双 `0x310000` OTA 槽；仍运行旧双 3 MiB 分区表的网关，首次升级须经 USB 同时刷入新的 `gateway/partitions.csv` 分区表和固件，保留 NVS。完成一次迁移后，后续固件才能使用现有 App/远程 OTA 更新。唤醒模型存储在 SD 卡 `/sdcard/srmodels/wn9s_nihaoxiaozhi/`。
 
-节点（按芯片 / 板子选择构建目录）：
+节点（C3 在 `node/`，S3 在 `node_s3/`）：
 
 ```bash
 cd node
 idf.py -B build_c3 -DIDF_TARGET=esp32c3 -DSDKCONFIG=build_c3/sdkconfig build
 idf.py -B build_c3 -DIDF_TARGET=esp32c3 -DSDKCONFIG=build_c3/sdkconfig -p /dev/ttyACM1 flash monitor
-# ESP32-S3 核心板把 c3 换成 s3
+# ESP32-S3 核心板：
+cd ../node_s3
+idf.py -B build_s3 -DIDF_TARGET=esp32s3 -DSDKCONFIG=build_s3/sdkconfig build
 # Korvo 板当节点（工程名 esp_s3_korvo，见 sdkconfig.defaults.korvo）：
 idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_korvo \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.korvo" set-target esp32s3 build
@@ -75,10 +80,11 @@ idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_ko
 C3 继电器节点用的是这种（关了深睡）。浅睡后 USB 串口日志看不到，见 [docs/protocol.md](docs/protocol.md#省电接收窗口)。
 手动编译时 CMake 会缓存上次的 `PROJECT_VER`，改了版本号要加 `-DPROJECT_VER=x.y.z`（发版脚本会自动带上）。
 
-合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `sdkconfig.defaults.c3relay`，
+合宙 CORE-ESP32-C3 + 单路低电平触发继电器（USB 灯条）：工程名 `esp_c3_relay`，见 `node/sdkconfig.defaults.c3relay`，
 继电器 IN 接 GPIO4、VCC 接 3V3；不带 PWM 调光通道，板载 LED D4(GPIO12)、D5(GPIO13) 开机拉低熄灭（`NODE_LED_OFF_GPIOS`）。这个节点关掉了签名，编译不需要 `keys/signing_key.pem`，OTA 也不校验签名：
 
 ```bash
+cd node  # 从总仓根目录执行
 idf.py -B build_c3relay -DSDKCONFIG=build_c3relay/sdkconfig -DNODE_PROJECT=esp_c3_relay \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.c3relay" set-target esp32c3 build
 ```

@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <!-- App 自更新下载的安装包 -->
-    <cache-path name="update" path="update/" />
-</paths>

@@ -5,7 +5,7 @@
 
 步骤：
   1. 编译网关固件（不签名），版本 --gw-version（默认取 gateway/CMakeLists.txt）；
-     编译各种节点固件（NODE_BUILDS），版本取 node/CMakeLists.txt
+     编译各种节点固件（NODE_BUILDS），分别从 node/ 和 node_s3/ 读取版本
   2. 打 App release 包（发布签名，内置网关固件），版本号即参数
   3. 在 gitee 发布仓库建 Release vX.Y.Z，上传 APK、网关固件和节点固件，更新 version.json
   4. 往云端 espgw/app/latest 发布保留消息（需要 pip install paho-mqtt）
@@ -37,14 +37,14 @@ OWNER, REPO = 'yu_ji_hai', 'app_release'
 API = f'https://gitee.com/api/v5/repos/{OWNER}/{REPO}'
 GW_BUILD = 'build_wake'
 GW_BIN = ROOT / 'gateway' / GW_BUILD / 'esp_s3_gateway.bin'
-# 节点固件种类：(编译目录, 额外 idf.py 参数)；工程名和芯片从生成的镜像里读
+# 节点固件种类：(子仓目录, 编译目录, 额外 idf.py 参数)；工程名和芯片从生成的镜像里读
 NODE_BUILDS = [
-    ('build_c3', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3/sdkconfig']),
-    ('build_s3', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_s3/sdkconfig']),
-    ('build_korvo', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_korvo/sdkconfig', '-DNODE_PROJECT=esp_s3_korvo',
-                     '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.korvo']),
-    ('build_c3relay', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3relay/sdkconfig', '-DNODE_PROJECT=esp_c3_relay',
-                       '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.c3relay']),
+    ('node', 'build_c3', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3/sdkconfig']),
+    ('node_s3', 'build_s3', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_s3/sdkconfig']),
+    ('node_s3', 'build_korvo', ['-DIDF_TARGET=esp32s3', '-DSDKCONFIG=build_korvo/sdkconfig', '-DNODE_PROJECT=esp_s3_korvo',
+                      '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.korvo']),
+    ('node', 'build_c3relay', ['-DIDF_TARGET=esp32c3', '-DSDKCONFIG=build_c3relay/sdkconfig', '-DNODE_PROJECT=esp_c3_relay',
+                        '-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.c3relay']),
 ]
 CHIPS = {5: 'esp32c3', 9: 'esp32s3', 13: 'esp32c6'}
 APK = ROOT / 'android' / 'app' / 'build' / 'outputs' / 'apk' / 'release' / 'app-release.apk'
@@ -77,18 +77,19 @@ def fw_info(path):
 
 def build_nodes():
     """编译所有节点固件，返回 [(path, project, version, chip)]"""
-    ver = re.search(r'set\(PROJECT_VER "([^"]+)"\)', (ROOT / 'node' / 'CMakeLists.txt').read_text()).group(1)
     idf = os.environ.get('IDF_PATH', str(pathlib.Path.home() / 'esp' / 'esp-idf'))
     out = []
-    for bdir, args in NODE_BUILDS:
+    for node_dir, bdir, args in NODE_BUILDS:
+        ver = re.search(r'set\(PROJECT_VER "([^"]+)"\)',
+                        (ROOT / node_dir / 'CMakeLists.txt').read_text()).group(1)
         quoted = ' '.join(f"'{a}'" for a in args)
         run(f'. "{idf}/export.sh" >/dev/null && idf.py -B {bdir} {quoted} -DPROJECT_VER={ver} build',
-            cwd=ROOT / 'node')
-        bins = [p for p in (ROOT / 'node' / bdir).glob('*.bin')
+            cwd=ROOT / node_dir)
+        bins = [p for p in (ROOT / node_dir / bdir).glob('*.bin')
                 if not p.name.endswith('-unsigned.bin') and p.name not in ('bootloader.bin', 'ota_data_initial.bin')
                 and p.read_bytes()[:1] == b'\xe9']
         if len(bins) != 1:
-            die(f'node/{bdir} 里找不到唯一的固件：{[p.name for p in bins]}')
+            die(f'{node_dir}/{bdir} 里找不到唯一的固件：{[p.name for p in bins]}')
         project, v, chip = fw_info(bins[0])
         if v != ver:
             die(f'{bins[0]} 版本是 {v}，应为 {ver}')

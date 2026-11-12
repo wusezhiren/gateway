@@ -29,8 +29,14 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   "$root/node/main/node_ota_policy.c" -o "$build/node_ota_policy_test"
 "$build/node_ota_policy_test"
 cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -I"$root/node_s3/main" "$root/node_s3/tests/node_ota_policy_test.c" \
+  "$root/node_s3/main/node_ota_policy.c" -o "$build/node_s3_ota_policy_test"
+"$build/node_s3_ota_policy_test"
+cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I"$root/gateway/main" "$root/gateway/tests/gw_ota_policy_test.c" \
   "$root/gateway/main/gw_ota_policy.c" -o "$build/gw_ota_policy_test"
 "$build/gw_ota_policy_test"
 bash "$root/components/voice_core/tests/test_host.sh"
 bash "$root/listen_clouds/tests/test_host.sh"
+bash "$root/gateway_s31/tests/test_host.sh"
+bash "$root/gateway_s31/tests/ui_test_host.sh"

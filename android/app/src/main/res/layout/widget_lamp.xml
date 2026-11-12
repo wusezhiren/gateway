@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 桌面小组件：最多 3 个开关，对应快捷开关「灯 1~3」的绑定 -->
+<!-- 桌面小组件：4×1，四个独立绑定开关 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
@@ -14,20 +14,13 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:gravity="center"
-        android:text="在 App 节点详情里点“快捷开关”绑定"
+        android:text="在 App 节点详情里设置桌面小组件"
         android:textColor="#B3FFFFFF"
         android:textSize="13sp"
         android:visibility="gone" />
 
-    <TextView
-        android:id="@+id/btn1"
-        style="@style/WidgetButton" />
-
-    <TextView
-        android:id="@+id/btn2"
-        style="@style/WidgetButton" />
-
-    <TextView
-        android:id="@+id/btn3"
-        style="@style/WidgetButton" />
+    <TextView android:id="@+id/btn1" style="@style/WidgetButton" />
+    <TextView android:id="@+id/btn2" style="@style/WidgetButton" />
+    <TextView android:id="@+id/btn3" style="@style/WidgetButton" />
+    <TextView android:id="@+id/btn4" style="@style/WidgetButton" />
 </LinearLayout>

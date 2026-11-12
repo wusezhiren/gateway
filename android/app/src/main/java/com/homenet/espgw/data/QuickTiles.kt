@@ -31,7 +31,6 @@ class QuickTiles(private val context: Context) {
             if (binding == null) remove("slot$slot") else putString("slot$slot", binding.toJson().toString())
         }.apply()
         refresh(slot)
-        LampWidget.refresh(context)
     }
 
     /** 绑定了这个节点通道的槽位 */
@@ -44,7 +43,7 @@ class QuickTiles(private val context: Context) {
 
     fun refreshAll() = (1..SLOTS).forEach(::refresh)
 
-    /** 节点在 App、网关屏幕或别的手机上改了名，绑定里存的名字跟着改，磁贴和小组件一起刷新 */
+    /** 节点在 App、网关屏幕或别的手机上改了名，下拉磁贴的名字跟着改 */
     fun syncLabels(nodes: List<Node>) {
         for (slot in 1..SLOTS) {
             val b = get(slot) ?: continue

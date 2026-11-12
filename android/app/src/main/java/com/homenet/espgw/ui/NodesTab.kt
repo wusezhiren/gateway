@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +50,7 @@ import kotlin.math.roundToInt
 import com.homenet.espgw.data.Channel
 import com.homenet.espgw.data.Node
 import com.homenet.espgw.data.QuickTiles
+import com.homenet.espgw.data.WidgetBindings
 import com.homenet.espgw.data.TileBinding
 import com.homenet.espgw.data.NodeFirmware
 import com.homenet.espgw.data.NodeOtaStatus
@@ -66,6 +68,15 @@ fun NodesTab(vm: HomeViewModel) {
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("设备", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = vm::refreshNodes, enabled = vm.gateway != null && !vm.refreshingNodes) {
+                    Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                    Text(if (vm.refreshingNodes) " 刷新中…" else " 刷新设备")
+                }
+            }
+        }
         item { PairCard(vm) }
         if (vm.nodes.isEmpty() && vm.info != null) {
             item {
@@ -310,10 +321,11 @@ private fun NodeDetailDialog(node: Node, onDismiss: () -> Unit, onUnpair: () -> 
     }
 }
 
-/** 把节点的一路开关绑到手机下拉栏的快捷开关「灯 1~3」 */
+/** 节点通道可分别绑定到下拉快捷开关和桌面小组件。 */
 @Composable
 private fun QuickTileDialog(node: Node, onDismiss: () -> Unit) {
     val qt = QuickTiles(LocalContext.current)
+    val widgets = WidgetBindings(LocalContext.current)
     var ch by remember { mutableStateOf(0) }
     var version by remember { mutableStateOf(0) }  // 绑定改了之后重组
     val label = QuickTiles.label(node, ch)
@@ -333,6 +345,7 @@ private fun QuickTileDialog(node: Node, onDismiss: () -> Unit) {
                     }
                 }
                 version.let { }
+                Text("下拉快捷开关", style = MaterialTheme.typography.titleSmall)
                 (1..QuickTiles.SLOTS).forEach { slot ->
                     val b = qt.get(slot)
                     val mine = b != null && b.mac == node.mac && b.ch == ch
@@ -345,8 +358,21 @@ private fun QuickTileDialog(node: Node, onDismiss: () -> Unit) {
                         }) { Text(if (mine) "取消" else "绑定") }
                     }
                 }
+                Text("桌面小组件（4×1）", style = MaterialTheme.typography.titleSmall)
+                (1..WidgetBindings.SLOTS).forEach { slot ->
+                    val b = widgets.get(slot)
+                    val mine = b != null && b.mac == node.mac && b.ch == ch
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("位置 $slot", Modifier.width(64.dp))
+                        Text(b?.label ?: "未设置", Modifier.weight(1f), color = if (b == null) Color.Gray else Color.Unspecified)
+                        TextButton(onClick = {
+                            widgets.set(slot, if (mine) null else TileBinding(node.mac, ch, label))
+                            version++
+                        }) { Text(if (mine) "取消" else "绑定") }
+                    }
+                }
                 Text(
-                    "绑定后在手机下拉栏点“编辑”，把「灯 1」等拖进快捷开关区，点一下就开关。",
+                    "下拉快捷开关需在系统编辑页添加；桌面小组件四个位置独立设置。",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray,
                 )

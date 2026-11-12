@@ -26,6 +26,9 @@ import com.homenet.espgw.data.GwInfo
 import com.homenet.espgw.data.Node
 import com.homenet.espgw.data.NodeFirmware
 import com.homenet.espgw.data.QuickTiles
+import com.homenet.espgw.data.QuickStateCache
+import com.homenet.espgw.data.WidgetBindings
+import com.homenet.espgw.widget.LampWidget
 import com.homenet.espgw.data.gatewayErrorText
 import com.homenet.espgw.data.userMessage
 import kotlinx.coroutines.CancellationException
@@ -35,6 +38,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.io.InputStream
 
@@ -69,14 +74,27 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     var info by mutableStateOf<GwInfo?>(null)
         private set
     private val tiles = QuickTiles(app)
+    private val quickState = QuickStateCache(app)
+    private val widgetBindings = WidgetBindings(app)
     private val nodesState = mutableStateOf<List<Node>>(emptyList())
     var nodes: List<Node>
         get() = nodesState.value
         private set(value) {
+            val changed = nodesState.value != value
             nodesState.value = value
-            if (value.isNotEmpty()) tiles.syncLabels(value)
+            if (value.isNotEmpty()) {
+                quickState.update(value)
+                tiles.syncLabels(value)
+                widgetBindings.syncLabels(value)
+                if (changed) {
+                    LampWidget.showNodes(getApplication(), value)
+                    tiles.refreshAll()
+                }
+            }
         }
     var pairLeft by mutableIntStateOf(0)
+        private set
+    var refreshingNodes by mutableStateOf(false)
         private set
     var transport by mutableStateOf(Transport.None)
         private set
@@ -135,6 +153,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         val changed = gw?.mac != gateway?.mac || gw?.token != gateway?.token
         gateway = gw
         if (changed) {
+            quickState.clear()
             info = null
             nodes = emptyList()
             linkError = null
@@ -275,6 +294,41 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun refresh() = refreshLan(quiet = false)
+
+    /** 手动刷新只读取网关权威节点表，不向网关回写本地绑定。 */
+    fun refreshNodes() {
+        if (refreshingNodes) return
+        refreshingNodes = true
+        viewModelScope.launch {
+            try {
+                val c = cloud
+                if (transport == Transport.Cloud && c != null && cloudUsable()) {
+                    val previous = c.state.value
+                    c.command("get")
+                    val fresh = withTimeout(8_000) {
+                        c.state.first { it != null && it !== previous }
+                    }!!
+                    nodes = fresh.nodes.nodes
+                    pairLeft = fresh.nodes.pairLeft
+                } else {
+                    val api = api() ?: throw IllegalStateException("还没有绑定网关")
+                    val latest = api.nodes()
+                    nodes = latest.nodes
+                    pairLeft = latest.pairLeft
+                    lanOk = true
+                    transport = Transport.Lan
+                    linkError = null
+                }
+                message = "设备列表已刷新"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message = "刷新设备失败：${e.userMessage()}"
+            } finally {
+                refreshingNodes = false
+            }
+        }
+    }
 
     private suspend fun refreshLan(quiet: Boolean) {
         val api = api() ?: return

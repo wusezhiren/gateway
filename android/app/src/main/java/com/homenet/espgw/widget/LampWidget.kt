@@ -11,6 +11,10 @@ import android.widget.RemoteViews
 import com.homenet.espgw.MainActivity
 import com.homenet.espgw.R
 import com.homenet.espgw.data.QuickTiles
+import com.homenet.espgw.data.WidgetBindings
+import com.homenet.espgw.data.QuickStateCache
+import com.homenet.espgw.data.Node
+import com.homenet.espgw.data.Rgb
 import com.homenet.espgw.data.SwitchClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,15 +24,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 桌面小组件：显示快捷开关「灯 1~3」绑定的开关，点一下取反。
+ * 桌面小组件：独立的 4 个槽位，前三个沿用旧版快捷开关绑定直到用户修改。
  * 状态在系统定时更新（30 分钟）、点击、App 退到后台、改绑定时刷新。
  */
 class LampWidget : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         work(context) { scope ->
-            val bindings = (1..QuickTiles.SLOTS).map { QuickTiles(context).get(it) }
-            render(context, bindings.map { if (it == null) null else Shown.LOADING }, keep = true)
+            val widgetBindings = WidgetBindings(context)
+            val bindings = (1..WidgetBindings.SLOTS).map(widgetBindings::get)
+            val cache = QuickStateCache(context)
+            render(context, bindings.map { b ->
+                if (b == null) null else cache.value(b)?.let { if (it != 0) Shown.ON else Shown.OFF }
+                    ?: Shown.LOADING
+            }, keep = true)
             val bound = bindings.filterNotNull()
             val states = if (bound.isEmpty()) emptyList()
             else withTimeoutOrNull(BUDGET_MS) { runCatching { SwitchClient(context, scope).states(bound) }.getOrNull() }
@@ -53,7 +62,7 @@ class LampWidget : AppWidgetProvider() {
             return
         }
         val slot = intent.getIntExtra(EXTRA_SLOT, 0)
-        val b = QuickTiles(context).get(slot) ?: return refresh(context)
+        val b = WidgetBindings(context).get(slot) ?: return refresh(context)
         work(context) { scope ->
             setSlot(context, slot, Shown.LOADING)
             val on = withTimeoutOrNull(BUDGET_MS) { runCatching { SwitchClient(context, scope).toggle(b) }.getOrNull() }
@@ -62,7 +71,7 @@ class LampWidget : AppWidgetProvider() {
                 false -> Shown.OFF
                 null -> Shown.UNKNOWN
             })
-            QuickTiles(context).refresh(slot)
+            QuickTiles(context).slotOf(b.mac, b.ch)?.let { QuickTiles(context).refresh(it) }
         }
     }
 
@@ -86,10 +95,10 @@ class LampWidget : AppWidgetProvider() {
         private const val ACTION_TOGGLE = "com.homenet.espgw.widget.TOGGLE"
         private const val EXTRA_SLOT = "slot"
         private const val BUDGET_MS = 9_000L
-        private val BUTTONS = intArrayOf(R.id.btn1, R.id.btn2, R.id.btn3)
+        private val BUTTONS = intArrayOf(R.id.btn1, R.id.btn2, R.id.btn3, R.id.btn4)
 
         /** 状态缓存：只改一个按钮时其他按钮照旧显示 */
-        private val shown = arrayOfNulls<Shown>(QuickTiles.SLOTS)
+        private val shown = arrayOfNulls<Shown>(WidgetBindings.SLOTS)
 
         /** 重新取状态（改了绑定、App 里改了开关后调用） */
         fun refresh(context: Context) {
@@ -103,6 +112,19 @@ class LampWidget : AppWidgetProvider() {
             )
         }
 
+        /** Foreground HTTP poll or MQTT push already has fresh data; avoid another request. */
+        fun showNodes(context: Context, nodes: List<Node>) {
+            val bindings = WidgetBindings(context)
+            render(context, (1..WidgetBindings.SLOTS).map { slot ->
+                val b = bindings.get(slot) ?: return@map null
+                val channel = nodes.firstOrNull { it.mac.equals(b.mac, ignoreCase = true) }
+                    ?.ch?.getOrNull(b.ch) ?: return@map Shown.UNKNOWN
+                val value = channel.desired ?: channel.value
+                val on = if (channel.type == "rgb") Rgb.on(value) else value != 0
+                if (on) Shown.ON else Shown.OFF
+            })
+        }
+
         private fun setSlot(context: Context, slot: Int, s: Shown) {
             val all = shown.copyOf()
             all[slot - 1] = s
@@ -111,10 +133,10 @@ class LampWidget : AppWidgetProvider() {
 
         /** keep：LOADING 时保留上次的开关颜色，只改文字，避免每次刷新都闪一下 */
         private fun render(context: Context, states: List<Shown?>, keep: Boolean = false) {
-            val tiles = QuickTiles(context)
+            val tiles = WidgetBindings(context)
             val views = RemoteViews(context.packageName, R.layout.widget_lamp)
             var any = false
-            for (slot in 1..QuickTiles.SLOTS) {
+            for (slot in 1..WidgetBindings.SLOTS) {
                 val id = BUTTONS[slot - 1]
                 val b = tiles.get(slot)
                 var s = states[slot - 1]

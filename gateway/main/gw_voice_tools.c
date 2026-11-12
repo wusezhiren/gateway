@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "esp_app_desc.h"
 #include "gw_api.h"
 #include "gw_voice_tools.h"
@@ -17,10 +18,13 @@ static bool valid_set_args(void *ctx, const char *json)
     cJSON *args = cJSON_ParseWithOpts(json, NULL, true);
     if (!cJSON_IsObject(args)) { cJSON_Delete(args); return false; }
     const char *mac = cJSON_GetStringValue(cJSON_GetObjectItem(args, "mac"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(args, "name"));
     const cJSON *ch = cJSON_GetObjectItem(args, "ch");
     const cJSON *value = cJSON_GetObjectItem(args, "value");
-    bool ok = valid_mac(mac) && integer_in_range(ch, 255) &&
-              integer_in_range(value, 65535) && cJSON_GetArraySize(args) == 3;
+    bool ok = ((mac && valid_mac(mac)) || (name && *name)) &&
+              (!mac || valid_mac(mac)) && (!name || *name) &&
+              integer_in_range(ch, 255) && integer_in_range(value, 65535) &&
+              cJSON_GetArraySize(args) == 3 + (mac && name ? 1 : 0);
     cJSON_Delete(args);
     return ok;
 }
@@ -90,12 +94,33 @@ static voice_status_t set_node(void *ctx, const char *json, char *out, size_t ca
     (void)ctx;
     cJSON *args = cJSON_ParseWithOpts(json, NULL, true);
     if (!args) return VOICE_ERR_ARGUMENT;
+    const char *mac = cJSON_GetStringValue(cJSON_GetObjectItem(args, "mac"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(args, "name"));
+    char resolved_mac[18] = {0};
+    const char *resolution_error = NULL;
+    if (name) {
+        cJSON *snapshot = gw_api_nodes_json();
+        const cJSON *nodes = cJSON_GetObjectItem(snapshot, "nodes");
+        int matches = 0;
+        const cJSON *node;
+        cJSON_ArrayForEach(node, nodes) {
+            const char *current = cJSON_GetStringValue(cJSON_GetObjectItem(node, "name"));
+            if (!current || strcmp(current, name)) continue;
+            const char *candidate = cJSON_GetStringValue(cJSON_GetObjectItem(node, "mac"));
+            if (candidate && (!mac || strcasecmp(candidate, mac) == 0)) {
+                strlcpy(resolved_mac, candidate, sizeof(resolved_mac));
+                matches++;
+            }
+        }
+        cJSON_Delete(snapshot);
+        if (matches != 1) resolution_error = matches ? "ambiguous_name" : "name_not_found";
+    }
     cJSON *command = cJSON_CreateObject();
     cJSON_AddStringToObject(command, "op", "set");
-    cJSON_AddStringToObject(command, "mac", cJSON_GetStringValue(cJSON_GetObjectItem(args, "mac")));
+    cJSON_AddStringToObject(command, "mac", name ? resolved_mac : mac);
     cJSON_AddNumberToObject(command, "ch", cJSON_GetObjectItem(args, "ch")->valueint);
     cJSON_AddNumberToObject(command, "value", cJSON_GetObjectItem(args, "value")->valueint);
-    const char *error = gw_api_exec(command);
+    const char *error = resolution_error ? resolution_error : gw_api_exec(command);
     cJSON_Delete(command);
     cJSON_Delete(args);
     cJSON *status = cJSON_CreateObject();
@@ -122,13 +147,14 @@ static void register_tools(void)
         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{}}";
     static const char set_schema[] =
         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-        "\"mac\":{\"type\":\"string\"},\"ch\":{\"type\":\"integer\"},"
-        "\"value\":{\"type\":\"integer\"}},\"required\":[\"mac\",\"ch\",\"value\"]}";
+        "\"mac\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},"
+        "\"ch\":{\"type\":\"integer\"},\"value\":{\"type\":\"integer\"}},"
+        "\"required\":[\"ch\",\"value\"],\"anyOf\":[{\"required\":[\"mac\"]},{\"required\":[\"name\"]}]}";
     voice_mcp_register_tool(&s_tools, "gateway.nodes.list",
         "List paired ESP-NOW nodes and actual channel values", list_schema,
         no_args, list_nodes, NULL);
     voice_mcp_register_tool(&s_tools, "gateway.node.set",
-        "Send a channel setting to an already paired ESP-NOW node", set_schema,
+        "Set a paired node channel by its current name or MAC. Call gateway.nodes.list for current names; duplicate names require MAC.", set_schema,
         valid_set_args, set_node, NULL);
     s_registered = true;
 }

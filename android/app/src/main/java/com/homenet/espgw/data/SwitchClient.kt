@@ -24,10 +24,12 @@ class SwitchClient(private val context: Context, private val scope: CoroutineSco
 
     /** 取反，返回新的开关状态 */
     suspend fun toggle(b: TileBinding): Boolean = withGateway { gw ->
-        val ch = gw.nodes().channelOf(b)
-        val v = toggled(ch)
+        val cached = QuickStateCache(context).value(b)
+        val ch = if (cached == null) gw.nodes().channelOf(b) else null
+        val v = if (ch != null) toggled(ch) else if (cached == 0) 1 else 0
         gw.set(b, v)
-        isOn(ch.copy(value = v, desired = v))
+        if (cached != null) QuickStateCache(context).setRelay(b, v)
+        if (ch != null && ch.type == "rgb") isOn(ch.copy(value = v, desired = v)) else v != 0
     }
 
     private interface Gw {

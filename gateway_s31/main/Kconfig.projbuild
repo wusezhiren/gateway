@@ -1,0 +1,107 @@
+menu "S31 Gateway"
+
+    menu "Message bus"
+        config GW_S31_MSGBUS_QUEUE_LENGTH
+            int "Message queue length"
+            range 4 128
+            default 16
+        config GW_S31_MSGBUS_MAX_SUBSCRIBERS
+            int "Maximum subscribers per message"
+            range 1 16
+            default 4
+        config GW_S31_MSGBUS_PAYLOAD_SIZE
+            int "Inline message payload size"
+            range 16 512
+            default 128
+        config GW_S31_MSGBUS_TASK_STACK
+            int "Message bus task stack size"
+            range 2048 16384
+            default 4096
+        config GW_S31_MSGBUS_TASK_PRIORITY
+            int "Message bus task priority"
+            range 1 24
+            default 8
+        config GW_S31_MSGBUS_TASK_CORE
+            int "Message bus task CPU core"
+            range 0 1
+            default 0
+    endmenu
+
+    menu "Board peripherals"
+        config GW_S31_ENABLE_DISPLAY
+            bool "RGB LCD and GT911 touch"
+            default y
+            help
+                Enable the 800x480 RGB display and GT911 touch controller.
+
+        config GW_S31_LVGL_DRAW_LINES
+            int "LVGL partial draw buffer height (lines)"
+            depends on GW_S31_ENABLE_DISPLAY
+            range 8 80
+            default 20
+
+        config GW_S31_LVGL_TICK_MS
+            int "LVGL tick interval (ms)"
+            depends on GW_S31_ENABLE_DISPLAY
+            range 5 100
+            default 20
+
+        config GW_S31_LVGL_MAX_SLEEP_MS
+            int "LVGL maximum sleep (ms)"
+            depends on GW_S31_ENABLE_DISPLAY
+            range 20 1000
+            default 100
+
+        config GW_S31_LVGL_PRIORITY
+            int "LVGL task priority (below wake and gateway tasks)"
+            depends on GW_S31_ENABLE_DISPLAY
+            range 1 10
+            default 3
+
+        config GW_S31_SCREEN_OFF_S
+            int "Screen off after no touch (seconds)"
+            depends on GW_S31_ENABLE_DISPLAY
+            range 1 3600
+            default 15
+
+        config GW_S31_ENABLE_AUDIO
+            bool "ES8389 audio codec"
+            default y
+            help
+                Enable the ES8389 speaker and dual microphone interfaces.
+
+        config GW_S31_ENABLE_SD
+            bool "MicroSD card"
+            default y
+
+        config GW_S31_ENABLE_KEYS
+            bool "ADC keys"
+            default y
+
+        config GW_S31_ENABLE_WS2812
+            bool "WS2812 status LED"
+            default y
+
+        config GW_S31_ENABLE_BUZZER
+            bool "Buzzer"
+            default n
+
+        config GW_S31_ENABLE_UART1
+            bool "UART1 header"
+            default n
+
+        config GW_S31_ENABLE_RS485
+            bool "RS485 interface"
+            default n
+
+        config GW_S31_ENABLE_CAN
+            bool "CAN interface"
+            default n
+    endmenu
+
+    menu "Board diagnostics"
+        config GW_S31_DIAGNOSTIC_LOG
+            bool "Log enabled peripheral initialization"
+            default y
+    endmenu
+endmenu

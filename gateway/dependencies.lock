@@ -238,6 +238,6 @@ direct_dependencies:
 - espressif/qrcode
 - idf
 - lvgl/lvgl
-manifest_hash: ef890e69cec50a0c4202f6191546a03226c9094c21a5ec515d29395b26815b6f
+manifest_hash: 673133ebae8e60beb3a713503af6f5386f693557965717a4bcd567edb086529c
 target: esp32s3
 version: 3.0.0

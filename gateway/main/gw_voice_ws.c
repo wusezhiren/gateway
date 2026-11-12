@@ -15,6 +15,8 @@
 #include "gw_cloud.h"
 #include "gw_audio.h"
 #include "gw_wake.h"
+#include "tts_resample.h"
+#include "voice_vad.h"
 #include "esp_audio_enc.h"
 #include "esp_opus_enc.h"
 #include "esp_audio_enc_reg.h"
@@ -24,6 +26,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_codec_dev.h"
 #include "driver/i2s_std.h"
+#include "driver/i2s_tdm.h"
 #include "driver/i2c_master.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -65,20 +68,23 @@ static const audio_codec_data_if_t *s_tts_data;
 static const audio_codec_ctrl_if_t *s_tts_ctrl;
 static const audio_codec_gpio_if_t *s_tts_gpio;
 static i2s_chan_handle_t s_tts_tx;
+static bool s_tts_tx_borrowed;
 static uint8_t *s_tts_pcm;
 static int16_t *s_tts_stereo;
+static tts_resample_t s_tts_resample;
 typedef struct { uint16_t len; uint8_t data[1024]; } tts_packet_t;
 static QueueHandle_t s_tts_queue;
 static TaskHandle_t s_tts_task;
 static SemaphoreHandle_t s_tts_finished;
 static volatile bool s_tts_end_requested;
+static volatile bool s_tts_cancelled;
 static void tts_close(void);
 static void tts_binary(const uint8_t *p, size_t len);
 
 static void tts_task(void *arg)
 {
     tts_packet_t packet;
-    while (!s_tts_end_requested || (s_tts_queue && uxQueueMessagesWaiting(s_tts_queue))) {
+    while (!s_tts_cancelled && (!s_tts_end_requested || (s_tts_queue && uxQueueMessagesWaiting(s_tts_queue)))) {
         if (xQueueReceive(s_tts_queue, &packet, pdMS_TO_TICKS(100)) == pdTRUE)
             tts_binary(packet.data, packet.len);
     }
@@ -99,6 +105,7 @@ static bool tts_start_worker(void)
     if (!s_tts_finished) return false;
     xSemaphoreTake(s_tts_finished, 0);
     s_tts_end_requested = false;
+    s_tts_cancelled = false;
     return xTaskCreatePinnedToCoreWithCaps(tts_task, "tts_play", 24576, NULL, 4,
                                             &s_tts_task, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS;
 }
@@ -111,9 +118,10 @@ static void tts_close(void)
     if (s_tts_gpio) { audio_codec_delete_gpio_if(s_tts_gpio); s_tts_gpio = NULL; }
     if (s_tts_data) { audio_codec_delete_data_if(s_tts_data); s_tts_data = NULL; }
     if (s_tts_ctrl) { audio_codec_delete_ctrl_if(s_tts_ctrl); s_tts_ctrl = NULL; }
-    if (s_tts_tx) { i2s_del_channel(s_tts_tx); s_tts_tx = NULL; }
+    if (s_tts_tx) { if (!s_tts_tx_borrowed) i2s_del_channel(s_tts_tx); s_tts_tx = NULL; s_tts_tx_borrowed = false; }
     free(s_tts_pcm); s_tts_pcm = NULL;
     free(s_tts_stereo); s_tts_stereo = NULL;
+    s_tts_resample = (tts_resample_t){0};
 }
 
 static esp_err_t tts_open(void)
@@ -128,18 +136,27 @@ static esp_err_t tts_open(void)
     i2c_master_bus_handle_t bus; if (i2c_master_get_bus_handle(I2C_NUM_1, &bus) != ESP_OK) return ESP_FAIL;
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     cc.dma_desc_num=2; cc.dma_frame_num=64;
-    if (i2s_new_channel(&cc, &s_tts_tx, NULL) != ESP_OK) return ESP_FAIL;
-    i2s_std_config_t sc = {.clk_cfg=I2S_STD_CLK_DEFAULT_CONFIG(24000),
+    s_tts_tx = gw_audio_duplex_tx();
+    s_tts_tx_borrowed = s_tts_tx != NULL;
+    if (s_tts_tx_borrowed && !gw_wake_barge_in_ready()) return ESP_ERR_INVALID_STATE;
+    if (!s_tts_tx_borrowed && i2s_new_channel(&cc, &s_tts_tx, NULL) != ESP_OK) {
+        ESP_LOGE(TAG, "TTS TX unavailable");
+        return ESP_FAIL;
+    }
+    i2s_std_config_t sc = {.clk_cfg=I2S_STD_CLK_DEFAULT_CONFIG(16000),
         .slot_cfg=I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,I2S_SLOT_MODE_STEREO),
         .gpio_cfg={.mclk=GPIO_NUM_16,.bclk=GPIO_NUM_9,.ws=GPIO_NUM_45,.dout=GPIO_NUM_8,.din=I2S_GPIO_UNUSED}};
     sc.clk_cfg.mclk_multiple=I2S_MCLK_MULTIPLE_256;
-    if (i2s_channel_init_std_mode(s_tts_tx,&sc)!=ESP_OK) return ESP_FAIL;
+    if (!s_tts_tx_borrowed && i2s_channel_init_std_mode(s_tts_tx,&sc)!=ESP_OK) {
+        ESP_LOGE(TAG, "TTS TX initialization failed");
+        return ESP_FAIL;
+    }
     audio_codec_i2c_cfg_t ic={.port=I2C_NUM_1,.addr=ES8311_CODEC_DEFAULT_ADDR,.bus_handle=bus};
     s_tts_ctrl=audio_codec_new_i2c_ctrl(&ic); audio_codec_i2s_cfg_t id={.port=I2S_NUM_0,.tx_handle=s_tts_tx};
     s_tts_data=audio_codec_new_i2s_data(&id); s_tts_gpio=audio_codec_new_gpio();
     es8311_codec_cfg_t ec={.ctrl_if=s_tts_ctrl,.gpio_if=s_tts_gpio,.codec_mode=ESP_CODEC_DEV_WORK_MODE_DAC,.master_mode=false,.use_mclk=true,.pa_pin=GPIO_NUM_48,.mclk_div=256,.hw_gain={.pa_voltage=5.0f,.codec_dac_voltage=3.3f}};
     s_tts_codec_if=es8311_codec_new(&ec); esp_codec_dev_cfg_t ed={.dev_type=ESP_CODEC_DEV_TYPE_OUT,.codec_if=s_tts_codec_if,.data_if=s_tts_data};
-    s_tts_codec=esp_codec_dev_new(&ed); esp_codec_dev_sample_info_t si={.bits_per_sample=16,.channel=2,.channel_mask=3,.sample_rate=24000};
+    s_tts_codec=esp_codec_dev_new(&ed); esp_codec_dev_sample_info_t si={.bits_per_sample=16,.channel=2,.channel_mask=3,.sample_rate=16000};
     if (!s_tts_codec || esp_codec_dev_open(s_tts_codec,&si)!=ESP_CODEC_DEV_OK || esp_codec_dev_set_out_vol(s_tts_codec,55)!=ESP_CODEC_DEV_OK) return ESP_FAIL;
     return ESP_OK;
 }
@@ -153,8 +170,10 @@ static void tts_binary(const uint8_t *p, size_t len)
     esp_audio_dec_in_raw_t raw={.buffer=(uint8_t *)p,.len=len};
     esp_audio_dec_out_frame_t out={.buffer=s_tts_pcm,.len=4096};
     if (esp_audio_dec_process(s_tts_dec,&raw,&out)==ESP_AUDIO_ERR_OK) {
-        int16_t *in=(int16_t *)s_tts_pcm,*o=s_tts_stereo; size_t samples=out.decoded_size/2;
-        if (samples*4<=8192) { for(size_t i=0;i<samples;i++){o[2*i]=in[i];o[2*i+1]=in[i];} esp_codec_dev_write(s_tts_codec,o,samples*4); }
+        size_t samples=out.decoded_size/sizeof(int16_t);
+        size_t produced=tts_resample_24_to_16(&s_tts_resample,(const int16_t *)s_tts_pcm,
+                                               samples,s_tts_stereo,8192/(2*sizeof(int16_t)));
+        if (produced && !s_tts_cancelled) esp_codec_dev_write(s_tts_codec,s_tts_stereo,produced*2*sizeof(int16_t));
     }
 }
 
@@ -166,10 +185,7 @@ typedef struct {
     int frame_samples;
     int packet_capacity;
     esp_err_t err;
-    size_t captured_samples;
-    size_t silence_samples;
-    size_t speech_candidate_samples;
-    bool speech_seen;
+    voice_vad_t vad;
     QueueHandle_t pcm_queue;
     volatile bool capture_done;
     volatile bool stop_requested;
@@ -180,6 +196,7 @@ typedef struct {
     size_t sent_frames;
     size_t sent_bytes;
     unsigned capture_limit_ms;
+    size_t live_samples;
 } listen_ctx_t;
 
 typedef struct { int16_t samples[512]; uint16_t count; } voice_pcm_frame_t;
@@ -213,29 +230,11 @@ static esp_err_t encode_pcm(const int16_t *samples, size_t count, listen_ctx_t *
     return x->err;
 }
 
-static void observe_speech(listen_ctx_t *x, const int16_t *samples, size_t count)
-{
-    if (!count) return;
-    uint64_t energy = 0;
-    for (size_t i = 0; i < count; ++i) {
-        int32_t value = samples[i];
-        energy += (int64_t)value * value;
-    }
-    x->captured_samples += count;
-    if (energy / count > 60U * 60U) {
-        x->speech_candidate_samples += count;
-        if (x->speech_candidate_samples >= 2560) x->speech_seen = true;
-        x->silence_samples = 0;
-    } else {
-        x->speech_candidate_samples = 0;
-        if (x->speech_seen) x->silence_samples += count;
-    }
-}
-
 static esp_err_t listen_pcm(const int16_t *samples, size_t count, void *arg)
 {
     listen_ctx_t *x = arg;
-    observe_speech(x, samples, count);
+    voice_vad_observe(&x->vad, samples, count);
+    x->live_samples += count;
     if (x->pcm_queue) {
         while (count) {
             voice_pcm_frame_t frame = {.count = count > 512 ? 512 : count};
@@ -247,16 +246,14 @@ static esp_err_t listen_pcm(const int16_t *samples, size_t count, void *arg)
             samples += frame.count;
             count -= frame.count;
         }
-        if (x->speech_seen && x->captured_samples > 32000 &&
-            x->silence_samples >= 12800) {
+        if (voice_vad_should_stop_live(&x->vad, x->live_samples)) {
             x->stop_requested = true;
             return ESP_ERR_INVALID_STATE;
         }
         return ESP_OK;
     }
     encode_pcm(samples, count, x);
-    if (x->err == ESP_OK && x->speech_seen && x->captured_samples > 24000 &&
-        x->silence_samples >= 16000) return ESP_ERR_INVALID_STATE;
+    if (x->err == ESP_OK && voice_vad_should_stop(&x->vad, false)) return ESP_ERR_INVALID_STATE;
     return x->err;
 }
 
@@ -272,10 +269,12 @@ static void voice_capture_task(void *arg)
     vTaskDeleteWithCaps(NULL);
 }
 
-static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_samples, bool auto_mode, bool continue_mic)
+static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_samples, bool auto_mode, bool continue_mic,
+                                        bool probe_barge)
 {
     int64_t session_started_us = esp_timer_get_time();
     s_tts_done = false;
+    s_tts_cancelled = false;
     gw_cloud_status_t cloud;
     gw_cloud_get_status(&cloud);
     if (cloud.connected) {
@@ -365,7 +364,7 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
         if (preroll && count) {
             for (size_t offset = 0; offset < count; offset += 512) {
                 size_t n = count - offset > 512 ? 512 : count - offset;
-                observe_speech(&x, preroll + offset, n);
+                voice_vad_observe(&x.vad, preroll + offset, n);
             }
             x.err = encode_pcm(preroll, count, &x);
             unsigned buffered_ms = (unsigned)(count * 1000 / 16000);
@@ -406,8 +405,8 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
     }
     int64_t upload_done_us = esp_timer_get_time();
     ESP_LOGI(TAG, "capture complete: %.2fs speech=%d silence=%.2fs dropped=%lu result=%s",
-             (double)x.captured_samples / 16000.0, x.speech_seen,
-             (double)x.silence_samples / 16000.0, (unsigned long)x.dropped_frames,
+              (double)x.vad.captured_samples / 16000.0, x.vad.speech_seen,
+              (double)x.vad.silence_samples / 16000.0, (unsigned long)x.dropped_frames,
              esp_err_to_name(x.err));
     if (!file_pcm || continue_mic) ESP_LOGI(TAG, "latency: setup=%lldms capture=%lldms upload_tail=%lldms sent=%.2fs",
                             (long long)((ready_us - session_started_us) / 1000),
@@ -428,25 +427,43 @@ static esp_err_t gw_voice_ws_listen_impl(const int16_t *file_pcm, size_t file_sa
     } else {
         ESP_LOGI(TAG, "auto listen frames=%u bytes=%u", (unsigned)x.sent_frames, (unsigned)x.sent_bytes);
     }
+    /* The capture owns a paired RX/TX channel; TTS borrows TX until playback closes. */
+    bool barge_started = false;
+    if ((continue_mic && !file_pcm) || probe_barge) {
+        esp_err_t barge_err = gw_wake_begin_barge_in();
+        barge_started = barge_err == ESP_OK;
+        ESP_LOGI(TAG, "barge-in microphone: %s", esp_err_to_name(barge_err));
+        if (barge_started) {
+            for (int i = 0; i < 30 && !gw_wake_barge_in_ready(); ++i) vTaskDelay(pdMS_TO_TICKS(20));
+            ESP_LOGI(TAG, "barge-in channels ready=%d", gw_wake_barge_in_ready());
+        }
+    }
     /* Keep MQTT paused until TTS is finished, with a bounded timeout for
      * silent/failed recognition. */
-    for (int i = 0; i < 200 && !s_tts_done &&
-         s_client && esp_websocket_client_is_connected(s_client); ++i)
+    for (int i = 0; i < 200 && !s_tts_done && !(barge_started && gw_wake_barge_in_detected()) &&
+          s_client && esp_websocket_client_is_connected(s_client); ++i)
         vTaskDelay(pdMS_TO_TICKS(100));
+    if (barge_started && gw_wake_barge_in_detected()) {
+        ESP_LOGI(TAG, "barge-in: cancelling old TTS/session");
+        s_tts_cancelled = true;
+    }
     s_tts_end_requested = true;
     if (s_tts_task && xSemaphoreTake(s_tts_finished, pdMS_TO_TICKS(5000)) != pdTRUE)
         ESP_LOGE(TAG, "TTS worker did not finish before websocket close");
     else if (s_tts_queue) { vQueueDeleteWithCaps(s_tts_queue); s_tts_queue = NULL; }
+    /* Keep capturing after a real wake word while the next WebSocket session
+     * connects. The next session takes the buffered audio before opening its RX. */
+    if (barge_started && !gw_wake_barge_in_detected()) gw_wake_end_barge_in();
     gw_voice_ws_stop();
     if (cloud.connected) gw_cloud_resume();
     return x.err;
 }
 
-typedef struct { TaskHandle_t waiter; esp_err_t result; const int16_t *pcm; size_t samples; bool auto_mode; bool continue_mic; } listen_task_ctx_t;
+typedef struct { TaskHandle_t waiter; esp_err_t result; const int16_t *pcm; size_t samples; bool auto_mode; bool continue_mic; bool probe_barge; } listen_task_ctx_t;
 static void listen_task(void *arg)
 {
     listen_task_ctx_t *ctx = arg;
-    ctx->result = gw_voice_ws_listen_impl(ctx->pcm, ctx->samples, ctx->auto_mode, ctx->continue_mic);
+    ctx->result = gw_voice_ws_listen_impl(ctx->pcm, ctx->samples, ctx->auto_mode, ctx->continue_mic, ctx->probe_barge);
     xTaskNotifyGive(ctx->waiter);
     vTaskDeleteWithCaps(NULL);
 }
@@ -475,7 +492,6 @@ esp_err_t gw_voice_ws_listen_with_preroll(const int16_t *pcm, size_t samples)
         return ESP_ERR_NO_MEM;
     }
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    gw_wake_resume();
     return ctx.result;
 }
 
@@ -507,6 +523,21 @@ esp_err_t gw_voice_ws_listen_pcm(const int16_t *pcm, size_t samples)
     }
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     gw_wake_resume();
+    return ctx.result;
+}
+
+esp_err_t gw_voice_ws_probe_barge_pcm(const int16_t *pcm, size_t samples)
+{
+    if (!pcm || !samples || samples > 160000) return ESP_ERR_INVALID_ARG;
+    gw_wake_pause();
+    listen_task_ctx_t ctx = {.waiter=xTaskGetCurrentTaskHandle(), .result=ESP_FAIL,
+                              .pcm=pcm, .samples=samples, .probe_barge=true};
+    if (xTaskCreateWithCaps(listen_task, "voice_barge_probe", 40960, &ctx, 5, NULL,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        gw_wake_resume();
+        return ESP_ERR_NO_MEM;
+    }
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     return ctx.result;
 }
 
@@ -677,7 +708,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t event_id, void *d
     case WEBSOCKET_EVENT_DATA:
         if (event->op_code == WS_TRANSPORT_OPCODES_BINARY && event->data_len > 0 &&
             event->payload_offset == 0 && event->data_len == event->payload_len) {
-            if (event->data_len <= sizeof(((tts_packet_t *)0)->data) && tts_start_worker()) {
+            if (!s_tts_cancelled && event->data_len <= sizeof(((tts_packet_t *)0)->data) && tts_start_worker()) {
                 tts_packet_t packet = {.len = event->data_len};
                 memcpy(packet.data, event->data_ptr, packet.len);
                 if (xQueueSend(s_tts_queue, &packet, 0) != pdTRUE)

@@ -46,6 +46,127 @@ static size_t s_preroll_pos;
 static size_t s_preroll_count;
 static volatile bool s_handoff_ready;
 static size_t s_wake_pos;
+static volatile bool s_barge_running;
+static volatile bool s_barge_detected;
+static volatile bool s_barge_done = true;
+static volatile bool s_barge_ready;
+static int16_t *s_barge_samples;
+static size_t s_barge_used;
+static int16_t *s_barge_preroll;
+static size_t s_barge_pos;
+static size_t s_barge_count;
+static size_t s_barge_after_wake;
+static volatile bool s_barge_handoff;
+
+static esp_err_t barge_feed(const int16_t *samples, size_t count, void *arg)
+{
+    if (!s_barge_running) return ESP_ERR_INVALID_STATE;
+    for (size_t i = 0; i < count; ++i) {
+        int16_t sample = samples[i];
+        s_barge_preroll[s_barge_pos] = sample;
+        s_barge_pos = (s_barge_pos + 1) % WAKE_PREROLL_SAMPLES;
+        if (s_barge_count < WAKE_PREROLL_SAMPLES) s_barge_count++;
+        if (s_barge_detected) {
+            if (s_barge_after_wake < WAKE_PREROLL_SAMPLES) s_barge_after_wake++;
+            continue; /* retain command audio until old session closes */
+        }
+        int32_t boosted = (int32_t)sample * 2;
+        if (boosted > INT16_MAX) boosted = INT16_MAX;
+        if (boosted < INT16_MIN) boosted = INT16_MIN;
+        s_barge_samples[s_barge_used++] = (int16_t)boosted;
+        if (s_barge_used == (size_t)s_chunk) {
+            s_barge_used = 0;
+            xSemaphoreTake(s_model_lock, portMAX_DELAY);
+            wakenet_state_t result = s_iface->detect(s_data, s_barge_samples);
+            xSemaphoreGive(s_model_lock);
+            if (result == WAKENET_DETECTED) {
+                s_barge_detected = true;
+                s_barge_after_wake = 0;
+                ESP_LOGI(TAG, "barge-in wake word detected");
+            }
+        }
+    }
+    return s_barge_running ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+static void barge_task(void *arg)
+{
+    s_barge_samples = heap_caps_malloc(s_chunk * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_barge_preroll = heap_caps_malloc(WAKE_PREROLL_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_barge_samples && s_barge_preroll) {
+        esp_err_t err = gw_audio_capture_duplex(12000, barge_feed, NULL);
+        ESP_LOGI(TAG, "barge-in capture ended: %s detected=%d", esp_err_to_name(err), s_barge_detected);
+    }
+    free(s_barge_samples); s_barge_samples = NULL;
+    s_barge_ready = false;
+    /* Keep preroll allocated until the waiting wake task takes ownership. */
+    s_barge_done = true;
+    vTaskDeleteWithCaps(NULL);
+}
+
+esp_err_t gw_wake_begin_barge_in(void)
+{
+    if (s_barge_running || !s_barge_done || !s_data || !s_pause) return ESP_ERR_INVALID_STATE;
+    s_barge_done = false;
+    s_barge_ready = false;
+    s_barge_detected = false;
+    s_barge_used = 0;
+    s_barge_pos = s_barge_count = 0;
+    s_barge_after_wake = 0;
+    free(s_barge_preroll); s_barge_preroll = NULL;
+    s_barge_handoff = false;
+    s_barge_running = true;
+    if (xTaskCreatePinnedToCoreWithCaps(barge_task, "barge_mic", 8192, NULL, 4, NULL, 0,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        s_barge_running = false;
+        s_barge_done = true;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+bool gw_wake_barge_in_detected(void) { return s_barge_detected; }
+bool gw_wake_barge_in_ready(void) { return s_barge_ready; }
+void gw_wake_barge_in_channels_ready(void) { s_barge_ready = true; }
+
+bool gw_wake_take_barge_in(void)
+{
+    if (!s_barge_handoff || !s_barge_preroll) return false;
+    size_t elapsed = s_barge_after_wake;
+    size_t saved = elapsed + 12800;
+    if (saved > s_barge_count) saved = s_barge_count;
+    if (saved > WAKE_PREROLL_SAMPLES) saved = WAKE_PREROLL_SAMPLES;
+    size_t start = (s_barge_pos + WAKE_PREROLL_SAMPLES - saved) % WAKE_PREROLL_SAMPLES;
+    for (size_t i = 0; i < saved; ++i)
+        s_preroll[i] = s_barge_preroll[(start + i) % WAKE_PREROLL_SAMPLES];
+    s_preroll_pos = saved % WAKE_PREROLL_SAMPLES;
+    s_preroll_count = saved;
+    /* The handoff only needs the final saved range; retain at most one ring. */
+    /* If the command filled the ring, the wake-word tail has been overwritten.
+     * Keep all available command audio rather than synthesizing old samples. */
+    size_t available_after_wake = elapsed < saved ? elapsed : saved;
+    s_wake_pos = (s_preroll_pos + WAKE_PREROLL_SAMPLES - available_after_wake) % WAKE_PREROLL_SAMPLES;
+    s_handoff_ready = true;
+    s_barge_handoff = false;
+    free(s_barge_preroll); s_barge_preroll = NULL;
+    return true;
+}
+
+void gw_wake_discard_barge_in(void)
+{
+    s_barge_handoff = false;
+    s_barge_detected = false;
+    free(s_barge_preroll);
+    s_barge_preroll = NULL;
+}
+
+void gw_wake_end_barge_in(void)
+{
+    s_barge_running = false;
+    while (!s_barge_done) vTaskDelay(pdMS_TO_TICKS(20));
+    s_barge_handoff = s_barge_detected;
+    if (!s_barge_handoff) { free(s_barge_preroll); s_barge_preroll = NULL; }
+}
 
 static void wake_release_for_voice(void)
 {
@@ -120,8 +241,16 @@ static void wake_test_task(void *arg)
             ESP_LOGI(TAG, "file test: local reply %s", esp_err_to_name(reply_err));
             size_t pre_roll = 12800;
             size_t send_offset = wake_offset > pre_roll ? wake_offset - pre_roll : 0;
-            esp_err_t voice_err = gw_voice_ws_listen_pcm(samples + send_offset, count - send_offset);
+            esp_err_t voice_err = gw_voice_ws_probe_barge_pcm(samples + send_offset, count - send_offset);
             ESP_LOGI(TAG, "file test: cloud session %s", esp_err_to_name(voice_err));
+            bool interrupted = gw_wake_barge_in_detected();
+            if (interrupted) {
+                ESP_LOGI(TAG, "file test: interrupted handoff ready, using live buffered command");
+                voice_err = gw_voice_ws_listen_with_preroll(NULL, 0);
+                ESP_LOGI(TAG, "file test: second cloud session %s", esp_err_to_name(voice_err));
+            }
+            gw_wake_end_barge_in();
+            gw_wake_discard_barge_in();
             gw_cloud_resume();
             ESP_LOGI(TAG, "file test: local wake/reply/cloud complete");
         }
@@ -222,17 +351,19 @@ static void wake_task(void *arg)
             ESP_LOGI(TAG, "你好小智 detected; preparing voice session");
             gw_cloud_pause();
             for (int i = 0; i < 30 && !gw_cloud_is_paused(); ++i) vTaskDelay(pdMS_TO_TICKS(20));
-            /* A spoken command can immediately follow the wake word. Blocking
-             * I2S for a local reply here would discard its first syllables. */
-            /* MQTT stays paused through WebSocket/TTS; its owner resumes after
-             * the voice client is destroyed, before mic capture restarts. */
-            esp_err_t voice_err = gw_voice_ws_listen_with_preroll(NULL, 0);
-            ESP_LOGI(TAG, "voice session ended: %s", esp_err_to_name(voice_err));
+            bool interrupted;
+            do {
+                esp_err_t voice_err = gw_voice_ws_listen_with_preroll(NULL, 0);
+                ESP_LOGI(TAG, "voice session ended: %s", esp_err_to_name(voice_err));
+                interrupted = voice_err == ESP_OK && gw_wake_barge_in_detected();
+                if (!interrupted) {
+                    gw_wake_end_barge_in();
+                    gw_wake_discard_barge_in();
+                }
+                if (interrupted) ESP_LOGI(TAG, "starting interrupted command");
+            } while (interrupted);
             gw_cloud_resume();
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            /* WakeNet9s clean() dereferences a null internal queue after a
-             * completed session on this model. Keep the instance and discard
-             * queued/partial audio before resuming detection instead. */
+            /* WakeNet9s clean() crashes after a session; discard partial input instead. */
             s_used = 0;
             s_preroll_count = 0;
             s_handoff_ready = false;
@@ -246,6 +377,10 @@ static void wake_task(void *arg)
 
 size_t gw_wake_take_handoff(int16_t *out, size_t capacity)
 {
+    if (s_barge_detected && s_barge_preroll) {
+        gw_wake_end_barge_in();
+        if (!gw_wake_take_barge_in()) return 0;
+    }
     if (!out || !s_handoff_ready) return 0;
     gw_wake_pause(); /* capture closes I2S before the voice task opens it */
     if (!s_idle) {

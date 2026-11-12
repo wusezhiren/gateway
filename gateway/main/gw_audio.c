@@ -26,6 +26,9 @@
 /* Keep DMA and capture buffers small: the running gateway has limited internal RAM. */
 static int16_t s_mic_buf[512 * 4];
 static int s_capture_slot;
+static bool s_probe_two_slots;
+static i2s_chan_handle_t s_duplex_tx;
+i2s_chan_handle_t gw_audio_duplex_tx(void) { return s_duplex_tx; }
 
 esp_err_t gw_audio_probe(void)
 {
@@ -50,7 +53,48 @@ esp_err_t gw_audio_probe(void)
     return found_all ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
-static esp_err_t capture_impl(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *ctx, bool diagnostic)
+esp_err_t gw_audio_duplex_probe(void)
+{
+    i2s_chan_handle_t rx = NULL, tx = NULL;
+    i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan.dma_desc_num = 2;
+    chan.dma_frame_num = 64;
+    esp_err_t err = i2s_new_channel(&chan, &tx, &rx);
+    if (err != ESP_OK) return err;
+    i2s_tdm_config_t cfg = {
+        .clk_cfg = I2S_TDM_CLK_DEFAULT_CONFIG(MIC_RATE),
+        .slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(
+            I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
+            I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
+        .gpio_cfg = {.mclk = GPIO_NUM_16, .bclk = GPIO_NUM_9, .ws = GPIO_NUM_45,
+                     .dout = GPIO_NUM_8, .din = GPIO_NUM_10},
+    };
+    cfg.slot_cfg.total_slot = 4;
+    cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    err = i2s_channel_init_tdm_mode(rx, &cfg);
+    if (err == ESP_OK) err = i2s_channel_init_tdm_mode(tx, &cfg);
+    if (err == ESP_OK) {
+        i2s_chan_info_t info = {0};
+        err = i2s_channel_get_info(tx, &info);
+        if (err == ESP_OK && info.pair_chan != rx) err = ESP_ERR_INVALID_STATE;
+    }
+    if (err == ESP_OK) printf("audio duplex: TX/RX paired at 16kHz, 4 slots\n");
+    if (tx) i2s_del_channel(tx);
+    if (rx) i2s_del_channel(rx);
+    return err;
+}
+
+esp_err_t gw_audio_mic_2slot_probe(void)
+{
+    gw_wake_pause();
+    s_probe_two_slots = true;
+    esp_err_t err = gw_audio_capture(2000, NULL, NULL);
+    s_probe_two_slots = false;
+    gw_wake_resume();
+    return err;
+}
+
+static esp_err_t capture_impl(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *ctx, bool diagnostic, bool two_slots, bool duplex)
 {
     if (duration_ms == 0 || duration_ms > 30000) {
         return ESP_ERR_INVALID_ARG;
@@ -71,7 +115,8 @@ static esp_err_t capture_impl(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *
     /* Keep internal DMA usage low enough to coexist with MQTT/WebSocket TLS. */
     chan_cfg.dma_desc_num = 2;
     chan_cfg.dma_frame_num = 64;
-    err = i2s_new_channel(&chan_cfg, NULL, &rx);
+    i2s_chan_handle_t tx = NULL;
+    err = i2s_new_channel(&chan_cfg, duplex ? &tx : NULL, &rx);
     if (err != ESP_OK) {
         goto done;
     }
@@ -85,11 +130,24 @@ static esp_err_t capture_impl(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *
             .dout = I2S_GPIO_UNUSED, .din = GPIO_NUM_10,
         },
     };
-    tdm.slot_cfg.total_slot = 4;
+    tdm.slot_cfg.total_slot = two_slots ? 2 : 4;
     tdm.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
     err = i2s_channel_init_tdm_mode(rx, &tdm);
     if (err != ESP_OK) {
         goto done;
+    }
+    if (duplex) {
+        i2s_std_config_t std = {
+            .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_RATE),
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+            .gpio_cfg = {.mclk = GPIO_NUM_16, .bclk = GPIO_NUM_9, .ws = GPIO_NUM_45,
+                         .dout = GPIO_NUM_8, .din = I2S_GPIO_UNUSED},
+        };
+        std.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+        err = i2s_channel_init_std_mode(tx, &std);
+        if (err != ESP_OK) goto done;
+        s_duplex_tx = tx;
+        gw_wake_barge_in_channels_ready();
     }
 
     audio_codec_i2c_cfg_t i2c_cfg = {
@@ -121,7 +179,7 @@ static esp_err_t capture_impl(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *
         goto done;
     }
     esp_codec_dev_sample_info_t sample_cfg = {
-        .bits_per_sample = 16, .channel = 4,
+        .bits_per_sample = 16, .channel = two_slots ? 2 : 4,
         .channel_mask = ES7210_SEL_MIC1 | ES7210_SEL_MIC2,
         .sample_rate = MIC_RATE,
     };
@@ -191,6 +249,7 @@ static esp_err_t capture_impl(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *
                            (esp_timer_get_time() - capture_started_us + 1)));
 
 done:
+    if (duplex) s_duplex_tx = NULL;
     if (codec) {
         esp_codec_dev_close(codec);
         esp_codec_dev_delete(codec);
@@ -205,7 +264,16 @@ done:
         audio_codec_delete_ctrl_if(ctrl);
     }
     if (rx) {
-        i2s_del_channel(rx);
+        esp_err_t del = i2s_del_channel(rx);
+        if (duplex && del != ESP_OK) printf("duplex RX release failed: %s\n", esp_err_to_name(del));
+    }
+    if (tx) {
+        esp_err_t stop = i2s_channel_disable(tx);
+        if (stop != ESP_OK && stop != ESP_ERR_INVALID_STATE)
+            printf("duplex TX disable: %s\n", esp_err_to_name(stop));
+        esp_err_t del = i2s_del_channel(tx);
+        if (del != ESP_OK) printf("duplex TX release failed: %s\n", esp_err_to_name(del));
+        if (del != ESP_OK && err == ESP_OK) err = del;
     }
     if (err != ESP_OK && diagnostic) {
         printf("mic test failed: %s\n", esp_err_to_name(err));
@@ -215,12 +283,17 @@ done:
 
 esp_err_t gw_audio_capture(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *ctx)
 {
-    return capture_impl(duration_ms, cb, ctx, true);
+    return capture_impl(duration_ms, cb, ctx, true, s_probe_two_slots, false);
 }
 
 esp_err_t gw_audio_capture_quiet(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *ctx)
 {
-    return capture_impl(duration_ms, cb, ctx, false);
+    return capture_impl(duration_ms, cb, ctx, false, false, false);
+}
+
+esp_err_t gw_audio_capture_duplex(unsigned duration_ms, gw_audio_pcm_cb_t cb, void *ctx)
+{
+    return capture_impl(duration_ms, cb, ctx, false, true, true);
 }
 
 typedef struct { int16_t *out; size_t capacity; size_t used; } record_ctx_t;

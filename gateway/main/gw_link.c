@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "gw_link.h"
+#include "gw_set_policy.h"
 #include "gw_node_ota.h"
 
 static const char *TAG = "gw_link";
@@ -188,20 +189,12 @@ static uint8_t current_channel(void)
 
 static int64_t set_timeout_us(const gw_node_t *n)
 {
-    if (n->lp_interval_ms && n->lp_window_ms) {
-        int ms = n->lp_window_ms / 2;
-        return (ms < TICK_MS ? TICK_MS : ms) * 1000LL;
-    }
-    return SET_TIMEOUT_US;
+    return gw_set_retry_interval_us(n->lp_interval_ms, n->lp_window_ms);
 }
 
 static int set_max_tries(const gw_node_t *n)
 {
-    if (n->lp_interval_ms && n->lp_window_ms) {
-        /* Cover two complete RX periods, including scheduler/Wi-Fi jitter. */
-        return n->lp_interval_ms * 2000LL / set_timeout_us(n) + 2;
-    }
-    return SET_MAX_TRIES;
+    return gw_set_retry_limit(n->lp_interval_ms, n->lp_window_ms);
 }
 
 static void send_set(int idx, uint8_t ch)
@@ -367,7 +360,7 @@ static void handle_state(const rx_msg_t *m, int type)
     /* A transport ACK alone does not prove that the output changed. Preserve
      * the requested value until the node reports the matching actual state. */
     for (int i = 0; i < cnt; ++i) {
-        if (s_pending[idx][i].active && n->value[i] == s_pending[idx][i].value)
+        if (s_pending[idx][i].active && gw_set_confirmed(n->value[i], s_pending[idx][i].value))
             s_pending[idx][i].active = false;
     }
 

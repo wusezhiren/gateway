@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "gw_wifi.c" "gw_link.c" "gw_console.c" "gw_keys.c" "gw_prov.c" "gw_audio.c" "gw_sd.c" "gw_wake.c" "gw_voice_tools.c" "gw_voice_ws.c"
+idf_component_register(SRCS "main.c" "gw_wifi.c" "gw_link.c" "gw_set_policy.c" "gw_console.c" "gw_keys.c" "gw_prov.c" "gw_audio.c" "gw_sd.c" "gw_wake.c" "gw_voice_tools.c" "gw_voice_ws.c" "tts_resample.c" "voice_vad.c" "gw_ota_policy.c"
                             "gw_http.c" "gw_ota.c" "gw_node_ota.c" "gw_api.c" "gw_cloud.c" "gw_display.c"
                             "ui/ui.c" "ui/ui_pages.c" "ui/ui_nodes.c" "ui/ui_overlay.c"
                             "ui/fonts/font_cn_16.c" "ui/fonts/font_cn_24.c"

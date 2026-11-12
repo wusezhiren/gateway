@@ -37,7 +37,7 @@ static int min_len(int type)
 
 int mp_parse(const uint8_t *data, int len)
 {
-    if (len < (int)sizeof(mp_hdr_t)) {
+    if (!data || len < (int)sizeof(mp_hdr_t)) {
         return 0;
     }
     const mp_hdr_t *hdr = (const mp_hdr_t *)data;
@@ -66,6 +66,9 @@ esp_err_t mp_espnow_setup(void)
 
 esp_err_t mp_peer_upsert(const uint8_t mac[6], bool encrypt)
 {
+#if !CONFIG_MP_ENCRYPT
+    (void)encrypt;
+#endif
     esp_now_peer_info_t peer = {
         .channel = 0,           /* 0 = 跟随当前信道 */
         .ifidx = WIFI_IF_STA,

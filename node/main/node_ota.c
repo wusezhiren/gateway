@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "mbedtls/sha256.h"
 #include "node_ota.h"
+#include "node_ota_policy.h"
 
 static const char *TAG = "node_ota";
 
@@ -96,11 +97,9 @@ static bool on_data(const mp_ota_data_t *d, int len, uint8_t *status)
     }
     *status = MP_OTA_OK;
     bool ack_req = d->flags & MP_OTA_F_ACK_REQ;
-    if (d->len == 0 || d->len > MP_OTA_CHUNK || len < MP_OTA_DATA_HDR_LEN + d->len) {
-        return ack_req;
-    }
-    /* 只接受紧接着的那片；乱序或重复的丢掉，网关从 ACK 的 offset 重发 */
-    if (d->offset != s_received || s_received + d->len > s_size) {
+    /* Reject malformed, duplicate, out-of-order or out-of-bounds chunks. */
+    if (!node_ota_accept_chunk(s_received, s_size, d->offset, d->len,
+                               MP_OTA_CHUNK, len, MP_OTA_DATA_HDR_LEN)) {
         return ack_req;
     }
     if (esp_ota_write(s_h, d->data, d->len) != ESP_OK) {
@@ -213,17 +212,4 @@ void node_ota_poll(void)
 bool node_ota_active(void)
 {
     return s_state == S_RECEIVING;
-}
-
-int node_ota_version_cmp(const char *a, const char *b)
-{
-    int va[3] = {0}, vb[3] = {0};
-    sscanf(a, "%d.%d.%d", &va[0], &va[1], &va[2]);
-    sscanf(b, "%d.%d.%d", &vb[0], &vb[1], &vb[2]);
-    for (int i = 0; i < 3; i++) {
-        if (va[i] != vb[i]) {
-            return va[i] < vb[i] ? -1 : 1;
-        }
-    }
-    return 0;
 }

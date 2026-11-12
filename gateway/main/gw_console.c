@@ -290,13 +290,22 @@ static int cmd_audio(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "mic") == 0) {
         return gw_audio_mic_test() == ESP_OK ? 0 : 1;
     }
+    if (argc == 2 && strcmp(argv[1], "duplex") == 0) {
+        gw_wake_pause();
+        esp_err_t err = gw_audio_duplex_probe();
+        gw_wake_resume();
+        return err == ESP_OK ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "mic2") == 0) {
+        return gw_audio_mic_2slot_probe() == ESP_OK ? 0 : 1;
+    }
     if (argc == 2 && strcmp(argv[1], "speaker") == 0) {
         return gw_audio_speaker_test() == ESP_OK ? 0 : 1;
     }
     if (argc == 2 && strcmp(argv[1], "opus") == 0) {
         return gw_audio_opus_test() == ESP_OK ? 0 : 1;
     }
-    printf("usage: audio probe|mic|speaker|opus\n");
+    printf("usage: audio probe|mic|mic2|speaker|opus|duplex\n");
     return 1;
 }
 

@@ -38,3 +38,13 @@ main/
 S31 当前板测入口为 `build_s31_board` 和 `sdkconfig.defaults.boardtest`。
 
 目录调整不等于功能验收完成；功能状态以各模块开发记录为准。
+
+## 其他子仓
+
+- S3网关：`main/board`、`services`、`ota`、`voice`、`ui`；公共头文件保留main。
+- C3/S3节点：`main/board`、`services`、`ota`；公共头文件保留main。
+- meshproto/voice_core：`src`实现、`include`公共接口、`tests`测试。
+- listen_clouds：已有`src/include/tests`结构，详见其docs/layout.md。
+- Android：保留标准Gradle与data/ui/widget分包，详见android/docs/layout.md。
+
+节点使用IDF5.4 ~/esp/esp-idf；S3网关使用IDF6，S31使用master预览环境，不能共享生成缓存或统一切换IDF版本。

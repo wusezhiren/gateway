@@ -29,7 +29,15 @@ docs/                   文档
 
 另装有 `~/esp/esp-idf-master`（IDF 6.2 开发版），工具链和 Python 环境同时支持 `esp32s3`、`esp32s31`、`esp32c3`。进入需要使用 master 的终端后运行 `. ~/esp/esp-idf-master/export.sh`，然后执行 `idf.py --preview --list-targets` 核对目标；S31 构建命令见 [gateway_s31/README.md](gateway_s31/README.md)，移植顺序见 [gateway_s31/PLAN.md](gateway_s31/PLAN.md)。原 S3/C3 的已验证构建仍使用上面的 IDF 6.0/5.4 环境，不要复用不同 IDF 版本的构建目录。
 
-各工程均以 Git 子模块固定版本；总仓位于 <https://github.com/wusezhiren/gateway>。克隆时使用 `git clone --recurse-submodules https://github.com/wusezhiren/gateway.git`，已有仓库执行 `git submodule update --init --recursive`。在子仓修改代码后先提交并推送该子仓，再在总仓提交更新后的子仓指针。`tools/test_host.sh` 会运行共享协议、语音、节点与 S31 主机测试。
+各工程均以 Git 子模块固定版本；总仓位于 <https://github.com/wusezhiren/gateway.git>。拉取总仓并初始化全部子仓：
+
+```bash
+git clone https://github.com/wusezhiren/gateway.git
+cd gateway
+git submodule update --init --recursive
+```
+
+已有总仓更新时，在总仓目录执行 `git pull --ff-only`，再执行 `git submodule update --init --recursive`。在子仓修改代码后先提交并推送该子仓，再在总仓提交更新后的子仓指针。`tools/test_host.sh` 会运行共享协议、语音、节点与 S31 主机测试。
 
 ## 签名密钥
 

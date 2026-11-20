@@ -59,10 +59,11 @@ espsecure.py generate_signing_key --version 2 --scheme rsa3072 keys/signing_key.
 ```bash
 cd gateway
 idf.py -B build_wake -DSDKCONFIG=build_wake/sdkconfig build
-idf.py -p /dev/ttyACM1 flash monitor   # Korvo 原生 USB 口（303a:1001），以 ls /dev/serial/by-id 为准
+idf.py -B build_wake -DSDKCONFIG=build_wake/sdkconfig -p "$KORVO_UART_PORT" flash monitor
 ```
 
-语音版网关固件使用双 `0x310000` OTA 槽；仍运行旧双 3 MiB 分区表的网关，首次升级须经 USB 同时刷入新的 `gateway/partitions.csv` 分区表和固件，保留 NVS。完成一次迁移后，后续固件才能使用现有 App/远程 OTA 更新。唤醒模型存储在 SD 卡 `/sdcard/srmodels/wn9s_nihaoxiaozhi/`。
+语音版网关固件使用双 `0x310000` OTA 槽；仍运行旧双 3 MiB 分区表的网关，首次升级须经 USB 同时刷入新的 `gateway/partitions.csv` 分区表和固件，保留 NVS。完成一次迁移后，后续固件才能使用现有 App/远程 OTA 更新。
+S3 网关的“小聆小聆”模型内置于固件，待机与播报打断都使用 ES7210 采音。J3（板载 USB 转串口）用于烧录和控制台，`KORVO_UART_PORT` 按 `/dev/serial/by-id` 设置；J1 原生 USB-C 输出唤醒模型实时输入的 16 kHz 单声道 PCM16。USB-A 与 J1 共用数据线，不同时连接。建议使用新的 `sdkconfig` 构建目录以加载 UART 和 UAC 配置。
 
 节点（C3 在 `node/`，S3 在 `node_s3/`）：
 
@@ -77,6 +78,16 @@ idf.py -B build_s3 -DIDF_TARGET=esp32s3 -DSDKCONFIG=build_s3/sdkconfig build
 idf.py -B build_korvo -DSDKCONFIG=build_korvo/sdkconfig -DNODE_PROJECT=esp_s3_korvo \
        -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.korvo" set-target esp32s3 build
 ```
+
+N16R8 节点 + INMP441（BCLK GPIO4、WS GPIO5、SD GPIO6、L/R 接 GND），用独立开发配置编译：
+
+```bash
+idf.py -B build_inmp441 -DIDF_TARGET=esp32s3 -DNODE_PROJECT=esp_s3_inmp441 \
+       -DSDKCONFIG=build_inmp441/sdkconfig \
+       -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.inmp441" build
+```
+
+该配置持续监听并发布本地唤醒事件，原生 USB 输出 `S3 Node Microphone`；日志走 UART0。配置不复用 GPIO4–6 作为输出，不启用休眠，不需要签名密钥。
 
 工程名区分固件种类，节点只接受同名固件的升级：硬件配置不同的板子要用不同的 `NODE_PROJECT`（不超过 16 个字符），
 并加到 `tools/release_app.py` 的 `NODE_BUILDS`。0.3.0 以前的节点不支持远程升级，需先 USB 烧一次。

@@ -163,6 +163,7 @@ def main():
     ap.add_argument('--notes', default='', help='更新说明')
     ap.add_argument('--gw-version', help='网关固件版本，默认取 gateway/CMakeLists.txt')
     ap.add_argument('--skip-gateway', action='store_true', help=f'不重新编译网关，直接用 gateway/{GW_BUILD} 里的固件')
+    ap.add_argument('--gateway-bin', help='直接指定已构建的网关固件镜像')
     ap.add_argument('--skip-nodes', action='store_true', help='不发布节点固件')
     ap.add_argument('--dry-run', action='store_true', help='只编译，不上传、不通知')
     ap.add_argument('--copy-to', help='另外拷贝 APK 到这个目录')
@@ -184,8 +185,10 @@ def main():
         idf = os.environ.get('GATEWAY_IDF_PATH', str(pathlib.Path.home() / 'esp' / 'esp-idf-6.0-git'))
         run(f'. "{idf}/export.sh" >/dev/null && idf.py -B {GW_BUILD} '
             f'-DSDKCONFIG={GW_BUILD}/sdkconfig -DPROJECT_VER={gw_ver} build', cwd=ROOT / 'gateway')
-    project, gw_ver = fw_version(GW_BIN)
-    if project != 'esp_s3_gateway':
+    gateway_image = pathlib.Path(a.gateway_bin) if a.gateway_bin else GW_BIN
+    if not gateway_image.is_absolute(): gateway_image = ROOT / gateway_image
+    project, gw_ver = fw_version(gateway_image)
+    if project not in ('esp_s3_gateway', 'esp_s31_gateway'):
         die(f'固件工程名是 {project}')
     print(f'网关固件 {project} v{gw_ver}')
     nodes = [] if a.skip_nodes else build_nodes()
@@ -206,7 +209,7 @@ def main():
     # 网关固件也作为附件发布：远程升级时网关自己下载（App 通过云端下发地址和 SHA-256）
     gw_name = f'esp_s3_gateway-{gw_ver}.bin'
     gw_out = out.parent / gw_name
-    shutil.copy(GW_BIN, gw_out)
+    shutil.copy(gateway_image, gw_out)
     gw_data = gw_out.read_bytes()
     manifest = {
         'versionCode': version_code(a.version),

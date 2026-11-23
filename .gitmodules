@@ -29,3 +29,7 @@
 	path = components/voice_core
 	url = https://github.com/gateway-esp/voice-core.git
 	branch = main
+[submodule "node_esp8266"]
+	path = node_esp8266
+	url = https://github.com/gateway-esp/node_esp8266.git
+	branch = main

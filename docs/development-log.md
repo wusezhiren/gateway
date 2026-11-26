@@ -1,5 +1,16 @@
 # 集成开发记录
 
+## 2026-11-26：家里网关恢复上线、修复带屏远程 HTTPS OTA 并发布 v0.7.2
+
+- **家里网关 `44bd8df31b70` 离线根因与修复**：串口确认 Wi-Fi（`ZK520` / `192.168.31.121`）与两个 C3 节点正常，离线原因为 NVS 仍保存旧账号 `user=yjh`，连接 EMQX 持续被拒（`refused: 4` / `auth_failed`）。已在 EMQX `deployment-n4c113b3` 新建家里网关独立账号 `gateway-home` 并配置 `espgw/44bd8df31b70/` 对应的 6 条允许规则（不影响测试机 `7c4fad21de38` 的 `gateway-s3`），通过串口写入后恢复 `connected`。
+- **带屏 Korvo 远程 HTTPS OTA 失败根因与修复（`v0.7.2`）**：
+  - 串口复现确认原 `v0.7.0` 触发远程下载时，带屏空闲内部 RAM 仅约 `25 KiB`（最大块 `16 KiB`），`ota_pull` 任务启动后 `esp_aes_process_dma_ext_ram()` 为 PSRAM TLS 缓冲申请内部 DMA 弹跳缓冲失败，报 `E esp-aes: Failed to allocate memory` / `esp-tls-mbedtls: read error :-0x0084` → `download_http_error`。
+  - 修复：`gateway/sdkconfig.defaults` 关闭 `CONFIG_MBEDTLS_HARDWARE_AES`（改由软件 AES 直接在 PSRAM 原地运算，不再申请内部 DMA 缓冲）；`gateway/main/board/gw_display.c` 将 LVGL 双缓冲 `DRAW_LINES` 从 `40` 降至 `20`，释放 `22.4 KiB` 内部 DMA RAM；`gateway/main/ota/gw_ota.c` 在 `gw_ota_http_open()` 失败时补充堆统计日志；默认版本升至 `0.7.2`。
+- **构建、实板验证与云端发布**：
+  - `bash tools/test_host.sh` 全部通过；ESP-IDF 6.0 构建 `esp_s3_gateway.bin` 大小 `0x30b7a0`（3,192,736 字节，兼容 `0x310000` 与 `0x380000` 槽位），SHA-256 `5adb3b394ace20fa7b16b2885654ce4f58cd073a6698369e0a7f90585326768f`。
+  - 已通过局域网 `POST /api/ota/gateway` 升级家里网关 `44bd8df31b70` 至 `v0.7.2`（`ota_1`），重启后 Wi-Fi、MQTT（`gateway-home`）和 2 个 C3 节点均在线；实板在 MQTT + LVGL + WakeNet + UAC 全开下验证 Gitee 两级 302 跳转与 TLS 镜像头解密读取通过且 MQTT 保持在线。
+  - 已将 `esp_s3_gateway-0.7.2.bin` 上传至 Gitee `yu_ji_hai/app_release` 的 `v0.3.16` 附件并更新 `version.json`（公网下载 SHA-256 校验通过）。
+
 ## 2026-11-26：网关外设自适应 v0.7.1 发布、EMQX ACL 收紧与家里网关离线排查
 
 - **主线整理与推送**：已将私有节点外网控制、管理员隔离与 HLW8032 计量上报变更整理至各子仓 `main` 并推送（`meshproto` `a3a632e`、`node_esp8266` `6825deb`、`android` `cc616e6`、`gateway` `356a37f` → `29da6b5`）。测试台架无屏临时分支保留在 `gateway` 本地 `temp-pure-gateway`，未污染主线。
